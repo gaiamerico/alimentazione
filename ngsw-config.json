@@ -1,0 +1,37 @@
+{
+  "$schema": "./node_modules/@angular/service-worker/config/schema.json",
+  "index": "/index.html",
+  "navigationUrls": ["/**", "!/**/*.*", "!/**/*__*", "!/**/*__*/**"],
+  "assetGroups": [
+    {
+      "name": "app",
+      "installMode": "prefetch",
+      "resources": {
+        "files": ["/favicon.ico", "/favicon.svg", "/index.html", "/manifest.webmanifest", "/data/catalogo.json", "/*.css", "/*.js"]
+      }
+    },
+    {
+      "name": "assets",
+      "installMode": "lazy",
+      "updateMode": "prefetch",
+      "resources": {
+        "files": ["/**/*.(svg|cur|jpg|jpeg|png|apng|webp|avif|gif|otf|ttf|woff|woff2)"]
+      }
+    }
+  ],
+  "dataGroups": [
+    {
+      "name": "catalogo-alimenti",
+      "urls": [
+        "https://*.supabase.co/rest/v1/foods*",
+        "https://*.supabase.co/rest/v1/rpc/search_foods*"
+      ],
+      "cacheConfig": {
+        "strategy": "freshness",
+        "maxSize": 300,
+        "maxAge": "7d",
+        "timeout": "4s"
+      }
+    }
+  ]
+}

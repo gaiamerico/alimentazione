@@ -1,0 +1,19 @@
+# Dipendenze e build
+/node_modules
+/dist
+/.angular
+/out-tsc
+/tmp
+/coverage
+
+# Ambiente
+.env
+.env.local
+src/environments/environment.ts
+
+# Editor / OS
+.DS_Store
+.idea
+*.log
+.vercel
+.omc

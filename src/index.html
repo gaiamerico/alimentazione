@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="it">
+  <head>
+    <meta charset="utf-8" />
+    <title>NutriOssalati – Calcio, Ossalati e Nutrienti</title>
+    <base href="/" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="description" content="Cerca alimenti in italiano e bilancia ossalati, calcio, colesterolo e macronutrienti dei tuoi pasti." />
+    <meta name="theme-color" content="#0f766e" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0c1412" media="(prefers-color-scheme: dark)" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="NutriOssalati" />
+    <link rel="icon" type="image/svg+xml" href="favicon.svg" />
+    <link rel="icon" type="image/x-icon" href="favicon.ico" />
+    <link rel="apple-touch-icon" href="icons/icon-192x192.png" />
+    <link rel="manifest" href="manifest.webmanifest" />
+    <script>
+      // Applica il tema prima del rendering per evitare il "flash" chiaro/scuro.
+      (function () {
+        try {
+          var t = localStorage.getItem('tema');
+          var dark = t ? t === 'scuro' : matchMedia('(prefers-color-scheme: dark)').matches;
+          if (dark) document.documentElement.classList.add('dark');
+        } catch (e) {}
+      })();
+    </script>
+  </head>
+  <body>
+    <app-root></app-root>
+    <noscript>Per usare NutriOssalati è necessario abilitare JavaScript.</noscript>
+  </body>
+</html>
