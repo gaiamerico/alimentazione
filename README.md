@@ -8,6 +8,7 @@ Angular 22 (standalone, Signals, Reactive Forms, zoneless) · Tailwind CSS 4 · 
 ## Funzionalità
 
 - **Ricerca istantanea** full-text in italiano (prefissi, accenti, sinonimi, tolleranza ai refusi) tramite RPC `search_foods`.
+- **Ricerca online**: se un alimento non è nel catalogo, un utente con accesso può cercarlo online con un clic; viene identificato e stimato da Claude (nutrienti sostituiti da USDA FoodData Central quando c'è una corrispondenza) e aggiunto al database per tutti.
 - **Filtri rapidi**: basso ossalato (< 25 mg), alto calcio (> 150 mg), senza colesterolo, categoria; valori per 100 g o per porzione.
 - **Indicatore ossalati**: verde < 25 mg · giallo 25–99 mg · rosso ≥ 100 mg.
 - **Bilancio pasto**: composizione del pasto con grammature, totali e rapporto molare Ca:Ox con feedback (insufficiente / sufficiente / ottimo) e suggerimenti per colmare il calcio mancante.
@@ -19,6 +20,8 @@ Angular 22 (standalone, Signals, Reactive Forms, zoneless) · Tailwind CSS 4 · 
 ```
 ├── supabase/
 │   ├── migrations/20261110000000_schema.sql  # tabelle, indici FTS/trigram, vista totali, RLS, RPC search_foods
+│   ├── migrations/20261111000000_online_lookup.sql  # colonna created_by per gli alimenti aggiunti online
+│   ├── functions/lookup-food/index.ts        # Edge Function: ricerca online (Claude + USDA) e inserimento
 │   └── seed.sql                              # 148 alimenti (idempotente, upsert su name_it)
 ├── scripts/
 │   ├── set-env.mjs          # genera src/environments/environment.ts dalle variabili d'ambiente
@@ -73,6 +76,18 @@ Cosa crea lo schema:
 **RLS:** `foods` è in sola lettura per `anon`/`authenticated` (scrittura solo con service role); `favorites` e `diary_entries` sono visibili e modificabili solo dal proprietario (`auth.uid() = user_id`).
 
 **Auth:** in Authentication → URL Configuration imposta *Site URL* al dominio Vercel e aggiungi agli *Redirect URLs* `https://<tuo-dominio>/**` e `http://localhost:4200/**`. Per Google: Authentication → Providers → Google (client ID/secret da Google Cloud Console).
+
+### Ricerca online (Edge Function `lookup-food`)
+
+Applica anche la migrazione `20261111000000_online_lookup.sql` (colonna `created_by`), poi:
+
+```bash
+npx supabase secrets set ANTHROPIC_API_KEY=<chiave da console.anthropic.com>
+npx supabase secrets set FDC_API_KEY=<chiave gratuita da api.data.gov>   # facoltativa
+npx supabase functions deploy lookup-food
+```
+
+Come funziona: verifica che l'utente sia autenticato (max 20 aggiunte al giorno per utente), controlla che l'alimento non esista già, chiede a Claude nome italiano/inglese, categoria, porzione, nutrienti e ossalati stimati per 100 g, sostituisce i nutrienti con quelli USDA se trova una voce corrispondente e salva con la service role key. Gli ossalati stimati hanno affidabilità al massimo *media* e la fonte è indicata come «Stima AI». Ogni ricerca online costa una chiamata all'API di Claude (pochi centesimi di dollaro).
 
 ## 2. Sviluppo locale
 

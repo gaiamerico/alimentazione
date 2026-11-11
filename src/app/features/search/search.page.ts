@@ -1,11 +1,13 @@
 import { ChangeDetectionStrategy, Component, computed, inject, OnInit, signal } from '@angular/core';
 import { toSignal } from '@angular/core/rxjs-interop';
 import { FormControl, FormGroup, ReactiveFormsModule } from '@angular/forms';
-import { ActivatedRoute, Router } from '@angular/router';
+import { ActivatedRoute, Router, RouterLink } from '@angular/router';
 import { debounceTime, distinctUntilChanged, map, startWith, switchMap, tap } from 'rxjs';
 import { Food, SearchFilters } from '../../core/models/food.model';
+import { AuthService } from '../../core/services/auth.service';
 import { FoodService } from '../../core/services/food.service';
 import { MealService } from '../../core/services/meal.service';
+import { NetworkService } from '../../core/services/network.service';
 import { ToastService } from '../../core/services/toast.service';
 import { HIGH_CALCIUM_MIN, OXALATE_HIGH_MIN, OXALATE_LOW_MAX } from '../../core/utils/nutrition';
 import { FoodCard } from '../../shared/components/food-card';
@@ -14,7 +16,7 @@ import { Icon } from '../../shared/components/icon';
 @Component({
   selector: 'app-search-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [ReactiveFormsModule, FoodCard, Icon],
+  imports: [ReactiveFormsModule, RouterLink, FoodCard, Icon],
   template: `
     <section class="relative overflow-hidden rounded-3xl bg-gradient-to-br from-brand-700 via-brand-800 to-brand-900 px-5 py-8 text-white sm:px-8 sm:py-10">
       <div class="pointer-events-none absolute -top-16 -right-16 size-64 rounded-full bg-white/10 blur-3xl"></div>
@@ -92,6 +94,19 @@ import { Icon } from '../../shared/components/icon';
             <app-icon name="leaf" [size]="32" class="text-stone-400" />
             <p class="font-medium">Nessun alimento trovato</p>
             <p class="text-sm text-stone-500 dark:text-stone-400">Prova un altro termine o rimuovi qualche filtro.</p>
+            @if (canLookupOnline()) {
+              @if (auth.isLoggedIn()) {
+                <button type="button" class="btn-primary mt-3" [disabled]="lookingUp()" (click)="lookupOnline()">
+                  <app-icon name="sparkles" [size]="18" />
+                  @if (lookingUp()) { Ricerca online in corso… } @else { Cerca «{{ trimmedQuery() }}» online e aggiungilo }
+                </button>
+                <p class="max-w-sm text-xs text-stone-500 dark:text-stone-400">
+                  I valori vengono stimati automaticamente (nutrienti da USDA quando disponibili, ossalati da letteratura) e sono indicativi.
+                </p>
+              } @else {
+                <a routerLink="/accedi" class="btn-primary mt-3">Accedi per cercarlo online</a>
+              }
+            }
           </div>
         }
       }
@@ -104,6 +119,8 @@ export class SearchPage implements OnInit {
   private readonly toast = inject(ToastService);
   private readonly route = inject(ActivatedRoute);
   private readonly router = inject(Router);
+  private readonly network = inject(NetworkService);
+  protected readonly auth = inject(AuthService);
 
   protected readonly lowMax = OXALATE_LOW_MAX;
   protected readonly highMin = OXALATE_HIGH_MIN;
@@ -121,6 +138,12 @@ export class SearchPage implements OnInit {
   protected readonly perPortion = signal(false);
   protected readonly loading = signal(true);
   protected readonly categories = computed(() => this.foods.categories());
+  protected readonly lookingUp = signal(false);
+  private readonly query = toSignal(this.form.controls.query.valueChanges, { initialValue: '' });
+  protected readonly trimmedQuery = computed(() => this.query().trim());
+  protected readonly canLookupOnline = computed(
+    () => this.auth.isAvailable && this.network.online() && this.trimmedQuery().length >= 2,
+  );
 
   protected readonly results = toSignal(
     this.form.valueChanges.pipe(
@@ -154,6 +177,21 @@ export class SearchPage implements OnInit {
   protected addToMeal(food: Food): void {
     this.meal.add(food);
     this.toast.success(`${food.name_it} aggiunto al pasto (${food.default_portion_g} g)`);
+  }
+
+  protected async lookupOnline(): Promise<void> {
+    const query = this.trimmedQuery();
+    if (!query || this.lookingUp()) return;
+    this.lookingUp.set(true);
+    try {
+      const { food, created } = await this.foods.lookupOnline(query);
+      this.toast.success(created ? `${food.name_it} aggiunto al catalogo` : `${food.name_it} è già nel catalogo`);
+      void this.router.navigate(['/alimento', food.id]);
+    } catch (e) {
+      this.toast.error(e instanceof Error ? e.message : 'Ricerca online non riuscita.');
+    } finally {
+      this.lookingUp.set(false);
+    }
   }
 
   private syncUrl(f: SearchFilters): void {

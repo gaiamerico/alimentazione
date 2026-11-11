@@ -1,4 +1,5 @@
 import { computed, inject, Injectable, signal } from '@angular/core';
+import { FunctionsHttpError } from '@supabase/supabase-js';
 import { Food, SearchFilters } from '../models/food.model';
 import { HIGH_CALCIUM_MIN, normalizeText, OXALATE_LOW_MAX } from '../utils/nutrition';
 import { SupabaseService } from './supabase.service';
@@ -107,6 +108,36 @@ export class FoodService {
       .sort((a, b) => b.score - a.score || a.food.name_it.localeCompare(b.food.name_it, 'it'))
       .slice(0, limit)
       .map((s) => s.food);
+  }
+
+  /**
+   * Cerca online un alimento non presente nel catalogo (Edge Function `lookup-food`)
+   * e lo aggiunge al database. Richiede l'accesso. Lancia un Error con messaggio in italiano.
+   */
+  async lookupOnline(query: string): Promise<{ food: Food; created: boolean }> {
+    const client = this.supabase.client;
+    if (!client) throw new Error('Ricerca online non disponibile: Supabase non è configurato.');
+    const { data, error } = await client.functions.invoke<{ food: Food; created: boolean }>('lookup-food', {
+      body: { query: query.trim() },
+    });
+    if (error || !data?.food) {
+      let message = 'Ricerca online non riuscita: riprova più tardi.';
+      if (error instanceof FunctionsHttpError) {
+        try {
+          const body = (await error.context.json()) as { message?: string };
+          if (body.message) message = body.message;
+        } catch {
+          /* risposta non JSON */
+        }
+      }
+      throw new Error(message);
+    }
+    const food = normalizeFood(data.food);
+    const catalog = this._catalog().filter((f) => f.id !== food.id);
+    const updated = [...catalog, food].sort((a, b) => a.name_it.localeCompare(b.name_it, 'it'));
+    this._catalog.set(updated);
+    writeCache(updated);
+    return { food, created: data.created };
   }
 
   async getById(id: number): Promise<Food | null> {
