@@ -48,6 +48,9 @@ interface NavItem {
         </nav>
 
         <div class="ml-auto flex items-center gap-1">
+          <a routerLink="/avvertenze" class="btn-ghost size-10 p-0" aria-label="Avvertenze" title="Avvertenze">
+            <app-icon name="shield" />
+          </a>
           <button type="button" class="btn-ghost size-10 p-0" (click)="theme.cycle()" [attr.aria-label]="themeLabel()" [attr.title]="themeLabel()">
             <app-icon [name]="themeIcon()" />
           </button>
@@ -75,8 +78,9 @@ interface NavItem {
     </main>
 
     <footer class="mx-auto hidden max-w-6xl px-6 pb-8 text-xs text-stone-500 md:block dark:text-stone-500">
-      Dati: USDA FoodData Central, CREA, Harvard T.H. Chan School of Public Health, Oxalate.org, OHF. Valori indicativi:
-      non sostituiscono il parere medico.
+      Dati: USDA FoodData Central, CREA, Harvard T.H. Chan School of Public Health, Oxalate.org, OHF, Open Food Facts (ODbL).
+      Valori indicativi: non sostituiscono il parere medico.
+      <a routerLink="/avvertenze" class="font-medium underline">Avvertenze</a>
     </footer>
 
     <!-- Navigazione mobile -->

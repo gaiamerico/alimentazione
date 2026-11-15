@@ -1,0 +1,12 @@
+# Configurazione Supabase CLI (solo ciò che serve a questo progetto).
+
+[functions.resolve-food]
+# Il token dell'utente viene verificato dentro la funzione (auth.getUser):
+# funziona sia con le chiavi JWT classiche sia con le nuove chiavi publishable.
+verify_jwt = false
+
+[functions.lookup-barcode]
+# Funzione pubblica: cerca un prodotto confezionato su Open Food Facts dal codice a barre.
+# Nessun dato personale e nessun costo per richiesta; il codice viene validato (cifra di
+# controllo) e il risultato resta in cache in packaged_products.
+verify_jwt = false

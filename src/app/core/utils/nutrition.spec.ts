@@ -2,14 +2,17 @@ import { describe, expect, it } from 'vitest';
 import { Food } from '../models/food.model';
 import {
   CALCIUM_PER_OXALATE_MG,
+  calciumBySource,
   calciumOxalateBalance,
   calciumSuggestions,
   guessMeal,
+  isPartial,
   normalizeText,
   oxalateLevel,
   scaleNutrients,
   shiftIsoDate,
   sumTotals,
+  topContributors,
 } from './nutrition';
 
 function food(partial: Partial<Food>): Food {
@@ -26,6 +29,9 @@ function food(partial: Partial<Food>): Food {
     fiber_g: 0,
     calcium_mg: 0,
     cholesterol_mg: 0,
+    saturated_fat_g: null,
+    sugars_g: null,
+    sodium_mg: null,
     oxalate_mg: 0,
     oxalate_confidence: 'alta',
     default_portion_g: 100,
@@ -73,6 +79,61 @@ describe('scaleNutrients / sumTotals', () => {
   });
 });
 
+describe('nutrienti facoltativi (grassi saturi, zuccheri, sodio)', () => {
+  const completo = food({ id: 1, fat_g: 10, saturated_fat_g: 4, sugars_g: 2, sodium_mg: 300 });
+  const senzaDati = food({ id: 2, fat_g: 5 });
+  const soloSodio = food({ id: 3, sodium_mg: 100 });
+
+  it('riscala i valori presenti e lascia null quelli mancanti', () => {
+    const v = scaleNutrients(completo, 50);
+    expect(v.saturated_fat_g).toBe(2);
+    expect(v.sugars_g).toBe(1);
+    expect(v.sodium_mg).toBe(150);
+    expect(v.partial).toEqual([]);
+
+    const m = scaleNutrients(senzaDati, 50);
+    expect(m.saturated_fat_g).toBeNull();
+    expect(m.sugars_g).toBeNull();
+    expect(m.sodium_mg).toBeNull();
+  });
+
+  it('non confonde lo zero con il dato mancante', () => {
+    const zero = scaleNutrients(food({ sodium_mg: 0 }), 100);
+    expect(zero.sodium_mg).toBe(0);
+    expect(zero.partial).not.toContain('sodium_mg');
+  });
+
+  it('tratta come mancante un alimento salvato prima dell’aggiunta dei campi', () => {
+    const vecchio = { ...completo } as Partial<Food>;
+    delete vecchio.sodium_mg;
+    expect(scaleNutrients(vecchio as Food, 100).sodium_mg).toBeNull();
+  });
+
+  it('somma solo i valori presenti e segnala il totale come parziale', () => {
+    const t = sumTotals([
+      { food: completo, grams: 100 },
+      { food: soloSodio, grams: 200 },
+    ]);
+    expect(t.sodium_mg).toBe(500);
+    expect(isPartial(t, 'sodium_mg')).toBe(false);
+    expect(t.saturated_fat_g).toBe(4);
+    expect(isPartial(t, 'saturated_fat_g')).toBe(true);
+    expect(t.partial).toEqual(['saturated_fat_g', 'sugars_g']);
+  });
+
+  it('restituisce null se nessun alimento ha il dato', () => {
+    const t = sumTotals([{ food: senzaDati, grams: 100 }]);
+    expect(t.saturated_fat_g).toBeNull();
+    expect(isPartial(t, 'saturated_fat_g')).toBe(false);
+  });
+
+  it('un pasto vuoto ha totali a zero e niente di parziale', () => {
+    const t = sumTotals([]);
+    expect(t.sodium_mg).toBe(0);
+    expect(t.partial).toEqual([]);
+  });
+});
+
 describe('calciumOxalateBalance', () => {
   it('usa il rapporto molare 1:1 (≈0,455 mg Ca per mg di ossalato)', () => {
     expect(CALCIUM_PER_OXALATE_MG).toBeCloseTo(0.4553, 3);
@@ -105,6 +166,101 @@ describe('calciumOxalateBalance', () => {
     const s = calciumSuggestions(116);
     expect(s[0]).toEqual({ label: 'Parmigiano Reggiano', amount: '15 g' });
     expect(s[1].amount).toBe('100 ml');
+  });
+});
+
+describe('testi del bilancio', () => {
+  it('non promettono che il calcio neutralizzi gli ossalati', () => {
+    const messages = [
+      calciumOxalateBalance(0, 5),
+      calciumOxalateBalance(30, 100),
+      calciumOxalateBalance(50, 100),
+      calciumOxalateBalance(95, 100),
+    ].map((b) => `${b.title} ${b.message}`.toLowerCase());
+    for (const m of messages) {
+      expect(m).not.toMatch(/neutralizz|elimin|annull|integrator/);
+    }
+    // I tre stati con ossalati non trascurabili ricordano che la risposta individuale varia.
+    for (const m of messages.slice(1)) expect(m).toContain('risposta individuale varia');
+  });
+
+  it('suggerisce solo alimenti', () => {
+    const labels = calciumSuggestions(200).map((s) => s.label.toLowerCase()).join(' ');
+    expect(labels).not.toMatch(/integrator|compress|supplement/);
+  });
+});
+
+describe('topContributors', () => {
+  const spinaci = food({ id: 1, name_it: 'Spinaci', oxalate_mg: 750, calcium_mg: 136 });
+  const mandorle = food({ id: 2, name_it: 'Mandorle', oxalate_mg: 435, calcium_mg: 269 });
+  const parmigiano = food({ id: 3, name_it: 'Parmigiano', calcium_mg: 1159, cholesterol_mg: 91 });
+  const latte = food({ id: 4, name_it: 'Latte', calcium_mg: 119, cholesterol_mg: 10 });
+
+  it('ordina per contributo e calcola la quota sul totale', () => {
+    const top = topContributors(
+      [
+        { food: mandorle, grams: 20 }, // 87 mg
+        { food: spinaci, grams: 100 }, // 750 mg
+        { food: parmigiano, grams: 30 }, // 0 mg di ossalati
+      ],
+      'oxalate_mg',
+    );
+    expect(top.map((c) => c.food.name_it)).toEqual(['Spinaci', 'Mandorle']);
+    expect(top[0].amount).toBe(750);
+    expect(top[0].share).toBeCloseTo(750 / 837, 5);
+    expect(top[0].share + top[1].share).toBeCloseTo(1, 5);
+  });
+
+  it('restituisce al massimo tre alimenti, con la quota calcolata su tutto il pasto', () => {
+    const top = topContributors(
+      [
+        { food: spinaci, grams: 100 }, // 136
+        { food: mandorle, grams: 100 }, // 269
+        { food: parmigiano, grams: 10 }, // 115,9
+        { food: latte, grams: 100 }, // 119
+      ],
+      'calcium_mg',
+    );
+    expect(top.map((c) => c.food.name_it)).toEqual(['Mandorle', 'Spinaci', 'Latte']);
+    expect(top.reduce((sum, c) => sum + c.share, 0)).toBeLessThan(1);
+  });
+
+  it('somma lo stesso alimento presente in più voci (diario)', () => {
+    const top = topContributors(
+      [
+        { food: latte, grams: 100 },
+        { food: parmigiano, grams: 10 },
+        { food: latte, grams: 200 },
+      ],
+      'cholesterol_mg',
+    );
+    expect(top).toHaveLength(2);
+    expect(top[0].food.name_it).toBe('Latte');
+    expect(top[0].amount).toBeCloseTo(30, 5);
+  });
+
+  it('è vuoto se nessun alimento apporta il nutriente', () => {
+    expect(topContributors([{ food: spinaci, grams: 100 }], 'cholesterol_mg')).toEqual([]);
+    expect(topContributors([], 'oxalate_mg')).toEqual([]);
+  });
+});
+
+describe('calciumBySource', () => {
+  it('separa il calcio degli alimenti ad alto contenuto di ossalati (≥ 100 mg/100 g)', () => {
+    const split = calciumBySource([
+      { food: food({ id: 1, oxalate_mg: 750, calcium_mg: 136 }), grams: 100 }, // alto
+      { food: food({ id: 2, oxalate_mg: 100, calcium_mg: 50 }), grams: 200 }, // alto (soglia inclusa)
+      { food: food({ id: 3, oxalate_mg: 99, calcium_mg: 40 }), grams: 100 }, // moderato
+      { food: food({ id: 4, oxalate_mg: 0, calcium_mg: 1159 }), grams: 20 }, // basso
+    ]);
+    expect(split.fromHighOxalate_mg).toBeCloseTo(236, 5);
+    expect(split.fromOthers_mg).toBeCloseTo(40 + 231.8, 5);
+  });
+
+  it('usa la soglia per 100 g dell’alimento, non la quantità nel pasto', () => {
+    const split = calciumBySource([{ food: food({ id: 1, oxalate_mg: 750, calcium_mg: 136 }), grams: 5 }]);
+    expect(split.fromHighOxalate_mg).toBeCloseTo(6.8, 5);
+    expect(split.fromOthers_mg).toBe(0);
   });
 });
 

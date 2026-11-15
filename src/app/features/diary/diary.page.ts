@@ -6,6 +6,7 @@ import { DiaryEntry, Food, MEAL_TYPES, MealType } from '../../core/models/food.m
 import { DiaryService } from '../../core/services/diary.service';
 import { guessMeal, scaleNutrients, shiftIsoDate, todayIso } from '../../core/utils/nutrition';
 import { BalancePanel } from '../../shared/components/balance-panel';
+import { ContributorsPanel } from '../../shared/components/contributors-panel';
 import { FoodPicker } from '../../shared/components/food-picker';
 import { Icon } from '../../shared/components/icon';
 import { NutrientSummary } from '../../shared/components/nutrient-summary';
@@ -14,7 +15,7 @@ import { OxalateBadge } from '../../shared/components/oxalate-badge';
 @Component({
   selector: 'app-diary-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DecimalPipe, ReactiveFormsModule, RouterLink, BalancePanel, FoodPicker, Icon, NutrientSummary, OxalateBadge],
+  imports: [DecimalPipe, ReactiveFormsModule, RouterLink, BalancePanel, ContributorsPanel, FoodPicker, Icon, NutrientSummary, OxalateBadge],
   template: `
     <header class="mb-6 flex flex-wrap items-end justify-between gap-4">
       <div>
@@ -43,6 +44,9 @@ import { OxalateBadge } from '../../shared/components/oxalate-badge';
     </header>
 
     <app-nutrient-summary [totals]="diary.totals()" [showDaily]="true" />
+    <div class="mt-3">
+      <app-contributors-panel [items]="diary.entries()" scope="della giornata" />
+    </div>
 
     <div class="mt-5 grid gap-5 lg:grid-cols-[1fr_400px]">
       <div class="space-y-5">
@@ -135,7 +139,7 @@ import { OxalateBadge } from '../../shared/components/oxalate-badge';
       <aside>
         <app-balance-panel [balance]="diary.balance()" heading="Bilancio della giornata" />
         <p class="mt-3 px-1 text-xs text-stone-500 dark:text-stone-400">
-          Il legame calcio-ossalato avviene pasto per pasto: il pallino colorato accanto a ogni pasto indica il suo bilancio.
+          Calcio e ossalati si incontrano pasto per pasto: il pallino colorato accanto a ogni pasto indica il suo bilancio teorico.
         </p>
       </aside>
     </div>

@@ -8,6 +8,7 @@ import { DiaryService } from '../../core/services/diary.service';
 import { MealService } from '../../core/services/meal.service';
 import { guessMeal, scaleNutrients, todayIso } from '../../core/utils/nutrition';
 import { BalancePanel } from '../../shared/components/balance-panel';
+import { ContributorsPanel } from '../../shared/components/contributors-panel';
 import { FoodPicker } from '../../shared/components/food-picker';
 import { Icon } from '../../shared/components/icon';
 import { NutrientSummary } from '../../shared/components/nutrient-summary';
@@ -16,12 +17,12 @@ import { OxalateBadge } from '../../shared/components/oxalate-badge';
 @Component({
   selector: 'app-meal-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DecimalPipe, ReactiveFormsModule, RouterLink, BalancePanel, FoodPicker, Icon, NutrientSummary, OxalateBadge],
+  imports: [DecimalPipe, ReactiveFormsModule, RouterLink, BalancePanel, ContributorsPanel, FoodPicker, Icon, NutrientSummary, OxalateBadge],
   template: `
     <header class="mb-6">
       <h1 class="page-title">Bilancio pasto</h1>
       <p class="page-subtitle">
-        Componi un pasto e verifica se il calcio presente basta a legare gli ossalati nell'intestino.
+        Componi un pasto e confronta il calcio presente con gli ossalati: una stima teorica, non un'indicazione medica.
       </p>
     </header>
 
@@ -85,6 +86,7 @@ import { OxalateBadge } from '../../shared/components/oxalate-badge';
         </section>
 
         <app-nutrient-summary [totals]="meal.totals()" />
+        <app-contributors-panel [items]="meal.items()" />
       </div>
 
       <aside class="space-y-5">
@@ -129,15 +131,20 @@ import { OxalateBadge } from '../../shared/components/oxalate-badge';
           <summary class="cursor-pointer font-semibold text-stone-900 dark:text-white">Come funziona il calcolo?</summary>
           <div class="mt-3 space-y-2 leading-relaxed">
             <p>
-              Nell'intestino il calcio si lega all'ossalato in rapporto molare <strong>1:1</strong> formando ossalato di calcio
-              insolubile, che viene eliminato invece di essere assorbito e filtrato dai reni.
+              Calcio e ossalato possono legarsi in rapporto molare <strong>1:1</strong>: in generale il calcio alimentare può
+              legare nell'intestino una parte degli ossalati dello stesso pasto.
             </p>
             <p>
-              1 mg di ossalato richiede circa <strong>0,46 mg di calcio</strong>. Poiché non tutto il calcio è disponibile
-              (fosfati, fitati, assorbimento), consideriamo ottimale un rapporto di <strong>2:1</strong>.
+              1 mg di ossalato corrisponde a circa <strong>0,46 mg di calcio</strong>. Poiché non tutto il calcio è disponibile
+              (fosfati, fitati, assorbimento), l'app usa come riferimento un rapporto di <strong>2:1</strong>.
+            </p>
+            <p>
+              È una stima teorica: la quota realmente legata varia da persona a persona e l'app non indica una dose
+              personale di calcio.
             </p>
             <p class="text-xs text-stone-500 dark:text-stone-400">
               Strumento informativo: non sostituisce il parere del medico o del dietista.
+              <a routerLink="/avvertenze" class="underline">Leggi le avvertenze</a>.
             </p>
           </div>
         </details>

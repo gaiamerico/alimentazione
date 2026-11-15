@@ -4,6 +4,13 @@
 //   node scripts/import-usda.mjs                 # anteprima (nessuna scrittura)
 //   node scripts/import-usda.mjs --apply         # scrive su Supabase (richiede service role key)
 //   node scripts/import-usda.mjs --limit 5       # solo i primi 5 alimenti
+//   node scripts/import-usda.mjs --apply --force # scrive anche le corrispondenze dubbie (vedi sotto)
+//
+// Prudenza: lo script prende il primo risultato della ricerca FDC. Se le kcal trovate
+// differiscono molto da quelle già in catalogo, la voce è probabilmente un altro alimento:
+// viene segnalata con ⚠ e NON viene scritta (a meno di --force).
+// Grassi saturi, zuccheri e sodio si scrivono solo se FDC li riporta: altrimenti restano
+// NULL ("dato non disponibile").
 //
 // Variabili (.env): SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, FDC_API_KEY (default DEMO_KEY).
 // Gli alimenti con fonte CREA non vengono toccati. Gli ossalati non sono presenti in FDC
@@ -21,6 +28,7 @@ if (existsSync(envFile)) {
 
 const args = process.argv.slice(2);
 const APPLY = args.includes('--apply');
+const FORCE = args.includes('--force');
 const LIMIT = args.includes('--limit') ? Number(args[args.indexOf('--limit') + 1]) : Infinity;
 const { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY } = process.env;
 const FDC_API_KEY = process.env.FDC_API_KEY || 'DEMO_KEY';
@@ -39,7 +47,15 @@ const NUTRIENTS = {
   291: 'fiber_g',
   301: 'calcium_mg',
   601: 'cholesterol_mg',
+  606: 'saturated_fat_g',
+  269: 'sugars_g',
+  307: 'sodium_mg',
 };
+// Nei Foundation Foods l'energia è riportata come Atwater (957 generale, 958 specifico).
+const KCAL_FALLBACK = [957, 958];
+// Colonne numeric(6,2): due decimali (i saturi delle verdure sono centesimi di grammo).
+const TWO_DECIMALS = new Set(['saturated_fat_g', 'sugars_g']);
+const round = (column, n) => (TWO_DECIMALS.has(column) ? Math.round(n * 100) / 100 : Math.round(n * 10) / 10);
 
 const headers = {
   apikey: SUPABASE_SERVICE_ROLE_KEY,
@@ -48,7 +64,7 @@ const headers = {
 };
 
 async function fetchFoods() {
-  const url = `${SUPABASE_URL}/rest/v1/foods?select=id,name_it,name_en,nutrient_source&name_en=not.is.null&order=id`;
+  const url = `${SUPABASE_URL}/rest/v1/foods?select=id,name_it,name_en,kcal,nutrient_source&name_en=not.is.null&order=id`;
   const res = await fetch(url, { headers });
   if (!res.ok) throw new Error(`Supabase: ${res.status} ${await res.text()}`);
   return (await res.json()).filter((f) => f.nutrient_source.startsWith('USDA'));
@@ -68,12 +84,22 @@ async function searchFdc(query) {
   const values = {};
   for (const n of hit.foodNutrients ?? []) {
     const column = NUTRIENTS[Number(n.nutrientNumber)];
-    if (column && typeof n.value === 'number') values[column] = Math.round(n.value * 10) / 10;
+    if (column && typeof n.value === 'number') values[column] = round(column, n.value);
+  }
+  if (!('kcal' in values)) {
+    for (const number of KCAL_FALLBACK) {
+      const n = (hit.foodNutrients ?? []).find((x) => Number(x.nutrientNumber) === number && typeof x.value === 'number');
+      if (n) {
+        values.kcal = round('kcal', n.value);
+        break;
+      }
+    }
   }
   return { fdcId: hit.fdcId, description: hit.description, values };
 }
 
 const foods = (await fetchFoods()).slice(0, LIMIT);
+let suspects = 0;
 console.log(`${foods.length} alimenti USDA da verificare${APPLY ? '' : ' (anteprima, usa --apply per salvare)'}\n`);
 
 for (const food of foods) {
@@ -83,8 +109,18 @@ for (const food of foods) {
       console.log(`– ${food.name_it}: nessun risultato FDC per "${food.name_en}"`);
       continue;
     }
-    console.log(`✓ ${food.name_it} ← FDC ${hit.fdcId} "${hit.description}"`, hit.values);
-    if (APPLY) {
+    // Kcal molto diverse da quelle in catalogo: quasi certamente la ricerca ha trovato un altro alimento.
+    const before = Number(food.kcal);
+    const after = hit.values.kcal;
+    const suspect =
+      Number.isFinite(before) && typeof after === 'number' && Math.abs(after - before) > Math.max(15, before * 0.25);
+    if (suspect) suspects++;
+    console.log(
+      `${suspect ? '⚠' : '✓'} ${food.name_it} ← FDC ${hit.fdcId} "${hit.description}"`,
+      hit.values,
+      suspect ? `— kcal in catalogo ${before}: corrispondenza dubbia${FORCE ? '' : ', non scritta'}` : '',
+    );
+    if (APPLY && (!suspect || FORCE)) {
       const res = await fetch(`${SUPABASE_URL}/rest/v1/foods?id=eq.${food.id}`, {
         method: 'PATCH',
         headers: { ...headers, Prefer: 'return=minimal' },
@@ -97,4 +133,9 @@ for (const food of foods) {
     if (String(e.message).includes('Limite')) break;
   }
   await new Promise((r) => setTimeout(r, 250)); // rispetta i limiti dell'API
+}
+if (suspects > 0) {
+  console.log(
+    `\n${suspects} corrispondenze dubbie (⚠): controlla name_en in catalogo; con --apply --force vengono scritte comunque.`,
+  );
 }

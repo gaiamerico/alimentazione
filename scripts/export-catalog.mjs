@@ -20,7 +20,10 @@ if (!SUPABASE_URL || !SUPABASE_ANON_KEY) {
 
 const columns =
   'id,name_it,name_en,category,synonyms,kcal,protein_g,carbs_g,fat_g,fiber_g,calcium_mg,cholesterol_mg,' +
-  'oxalate_mg,oxalate_confidence,default_portion_g,portion_label,nutrient_source,oxalate_source,notes';
+  'saturated_fat_g,sugars_g,sodium_mg,' +
+  'oxalate_mg,oxalate_confidence,default_portion_g,portion_label,nutrient_source,oxalate_source,notes,' +
+  // Voce della lista Harvard collegata (mg per porzione e fascia), per la scheda alimento offline.
+  'harvard:oxalate_reference(name_en,name_it,serving,oxalate_mg_serving,tier,serving_g)';
 const res = await fetch(`${SUPABASE_URL}/rest/v1/foods?select=${columns}&order=name_it`, {
   headers: { apikey: SUPABASE_ANON_KEY, Authorization: `Bearer ${SUPABASE_ANON_KEY}` },
 });

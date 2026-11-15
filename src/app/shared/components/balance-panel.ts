@@ -1,5 +1,6 @@
 import { DecimalPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
+import { RouterLink } from '@angular/router';
 import { CalciumOxalateBalance, calciumSuggestions } from '../../core/utils/nutrition';
 import { Icon, IconName } from './icon';
 
@@ -7,7 +8,7 @@ import { Icon, IconName } from './icon';
 @Component({
   selector: 'app-balance-panel',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DecimalPipe, Icon],
+  imports: [DecimalPipe, RouterLink, Icon],
   template: `
     @let b = balance();
     <section class="card overflow-hidden" [attr.aria-label]="'Bilancio calcio e ossalati: ' + b.title">
@@ -26,7 +27,7 @@ import { Icon, IconName } from './icon';
         <!-- Barra: calcio presente rispetto al calcio consigliato (rapporto molare 2:1) -->
         <div>
           <div class="mb-2 flex items-baseline justify-between text-sm">
-            <span class="font-medium">Calcio disponibile per legare gli ossalati</span>
+            <span class="font-medium">Calcio del pasto rispetto al riferimento 2:1</span>
             <span class="tabular-nums text-stone-500 dark:text-stone-400">
               {{ b.calcium_mg | number: '1.0-0' }} / {{ b.calciumRecommended_mg | number: '1.0-0' }} mg
             </span>
@@ -40,7 +41,7 @@ import { Icon, IconName } from './icon';
           <div class="mt-1.5 flex justify-between text-[11px] text-stone-500 dark:text-stone-400">
             <span>0</span>
             <span>1:1 legame teorico</span>
-            <span>2:1 consigliato</span>
+            <span>2:1 margine usato dall'app</span>
           </div>
         </div>
 
@@ -60,7 +61,7 @@ import { Icon, IconName } from './icon';
             </dd>
           </div>
           <div class="rounded-xl bg-stone-50 p-3 dark:bg-white/[0.03]">
-            <dt class="text-xs text-stone-500 dark:text-stone-400">Ossalati legabili</dt>
+            <dt class="text-xs text-stone-500 dark:text-stone-400">Ossalati legabili (stima teorica)</dt>
             <dd class="text-lg font-semibold whitespace-nowrap tabular-nums">{{ b.boundPercent | number: '1.0-0' }}%</dd>
           </div>
         </dl>
@@ -68,7 +69,8 @@ import { Icon, IconName } from './icon';
         @if (suggestions().length > 0) {
           <div class="rounded-xl border border-dashed border-stone-300 p-4 dark:border-white/15">
             <p class="text-sm font-medium">
-              Per un margine sicuro mancano circa <strong class="tabular-nums">{{ b.calciumMissing_mg | number: '1.0-0' }} mg</strong> di calcio. Ad esempio:
+              Per arrivare al rapporto 2:1 usato dall'app mancano circa <strong class="tabular-nums">{{ b.calciumMissing_mg | number: '1.0-0' }} mg</strong> di calcio.
+              Ad esempio, dagli alimenti:
             </p>
             <ul class="mt-2 grid gap-1.5 text-sm sm:grid-cols-2">
               @for (s of suggestions(); track s.label) {
@@ -83,9 +85,15 @@ import { Icon, IconName } from './icon';
         @if (b.oxalate_mg >= 100) {
           <p class="flex gap-2 text-xs text-stone-500 dark:text-stone-400">
             <app-icon name="info" [size]="16" />
-            Carico di ossalati elevato: anche con calcio sufficiente, valuta porzioni più piccole o cotture in acqua (bollitura e scolatura).
+            Carico di ossalati elevato: porzioni più piccole o la cottura in acqua (bollitura e scolatura) riducono gli ossalati del pasto.
           </p>
         }
+
+        <p class="text-[11px] leading-relaxed text-stone-500 dark:text-stone-400">
+          Stima teorica basata sul rapporto molare calcio:ossalato. In generale il calcio alimentare può legare parte degli
+          ossalati nell'intestino, ma la risposta individuale varia: non è un'indicazione medica.
+          <a routerLink="/avvertenze" class="underline">Avvertenze</a>
+        </p>
       </div>
     </section>
   `,

@@ -34,5 +34,20 @@ export const routes: Routes = [
     title: 'Accedi · NutriOssalati',
     loadComponent: () => import('./features/auth/login.page').then((m) => m.LoginPage),
   },
+  {
+    path: 'scansiona',
+    title: 'Scansiona un codice a barre · NutriOssalati',
+    loadComponent: () => import('./features/barcode/scan.page').then((m) => m.ScanPage),
+  },
+  {
+    path: 'prodotto/:barcode',
+    title: 'Prodotto confezionato · NutriOssalati',
+    loadComponent: () => import('./features/barcode/product.page').then((m) => m.ProductPage),
+  },
+  {
+    path: 'avvertenze',
+    title: 'Avvertenze · NutriOssalati',
+    loadComponent: () => import('./features/disclaimer/disclaimer.page').then((m) => m.DisclaimerPage),
+  },
   { path: '**', redirectTo: '' },
 ];

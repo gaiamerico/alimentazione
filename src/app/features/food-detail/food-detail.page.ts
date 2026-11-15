@@ -10,7 +10,16 @@ import { FavoritesService } from '../../core/services/favorites.service';
 import { FoodService } from '../../core/services/food.service';
 import { MealService } from '../../core/services/meal.service';
 import { ToastService } from '../../core/services/toast.service';
-import { calciumOxalateBalance, emptyTotals, guessMeal, scaleNutrients, todayIso } from '../../core/utils/nutrition';
+import {
+  calciumOxalateBalance,
+  emptyTotals,
+  guessMeal,
+  HARVARD_REVISION_LABEL,
+  HARVARD_TIER_LABEL,
+  MISSING_VALUE_LABEL,
+  scaleNutrients,
+  todayIso,
+} from '../../core/utils/nutrition';
 import { BalancePanel } from '../../shared/components/balance-panel';
 import { Icon } from '../../shared/components/icon';
 import { OxalateBadge } from '../../shared/components/oxalate-badge';
@@ -81,7 +90,11 @@ import { OxalateBadge } from '../../shared/components/oxalate-badge';
                 @for (row of rows(); track row.label) {
                   <tr>
                     <th scope="row" class="px-5 py-3 text-left font-normal text-stone-600 dark:text-stone-300" [class.pl-9]="row.sub">{{ row.label }}</th>
-                    <td class="px-5 py-3 text-right font-semibold tabular-nums">{{ row.value | number: row.digits }} {{ row.unit }}</td>
+                    @if (row.value === null) {
+                      <td class="px-5 py-3 text-right text-stone-400 italic dark:text-stone-500">{{ missingLabel }}</td>
+                    } @else {
+                      <td class="px-5 py-3 text-right font-semibold tabular-nums">{{ row.value | number: row.digits }} {{ row.unit }}</td>
+                    }
                   </tr>
                 }
               </tbody>
@@ -92,10 +105,25 @@ import { OxalateBadge } from '../../shared/components/oxalate-badge';
             <p class="card flex gap-3 p-4 text-sm"><app-icon name="info" class="text-brand-600" /> {{ f.notes }}</p>
           }
 
+          @if (f.harvard; as h) {
+            <section class="card p-4 text-sm" aria-label="Lista Harvard">
+              <p>
+                <strong>Lista Harvard:</strong>{{ ' ' }}<span class="tabular-nums">{{ h.oxalate_mg_serving | number: '1.0-1' }} mg</span> per porzione ({{ h.serving }}@if (h.serving_g) {, circa {{ h.serving_g | number: '1.0-0' }} g})
+                · fascia <strong>{{ tierLabel[h.tier] }}</strong>
+              </p>
+              <p class="mt-1 text-xs leading-relaxed text-stone-500 dark:text-stone-400">
+                Voce «{{ h.name_it ?? h.name_en }}» della lista Harvard T.H. Chan School of Public Health ({{ harvardRevision }}).
+                La fascia è la classificazione della fonte ed è riferita alla porzione (bassa &lt; 2 mg, media 2–10 mg, alta &gt; 10 mg):
+                non coincide con l'indicatore colorato dell'app, che è per 100 g, e non è una soglia clinica.
+              </p>
+            </section>
+          }
+
           <section class="text-xs leading-relaxed text-stone-500 dark:text-stone-400">
             <p><strong>Fonte nutrienti:</strong> {{ f.nutrient_source }}</p>
             <p><strong>Fonte ossalati:</strong> {{ f.oxalate_source }} · affidabilità stima: <strong>{{ f.oxalate_confidence }}</strong></p>
             <p class="mt-1">Il contenuto di ossalati varia sensibilmente per varietà, maturazione, terreno e cottura: i valori sono indicativi.</p>
+            <p class="mt-1">Strumento informativo: <a routerLink="/avvertenze" class="underline">leggi le avvertenze</a>.</p>
           </section>
         </div>
 
@@ -185,16 +213,24 @@ export class FoodDetailPage {
     return f ? this.favorites.ids().has(f.id) : false;
   });
 
-  protected readonly rows = computed(() => {
+  protected readonly missingLabel = MISSING_VALUE_LABEL;
+  protected readonly tierLabel = HARVARD_TIER_LABEL;
+  protected readonly harvardRevision = HARVARD_REVISION_LABEL;
+
+  /** value null = la fonte non riporta il dato. */
+  protected readonly rows = computed((): { label: string; value: number | null; unit: string; digits: string; sub: boolean }[] => {
     const v = this.values();
     return [
       { label: 'Energia', value: v.kcal, unit: 'kcal', digits: '1.0-0', sub: false },
       { label: 'Proteine', value: v.protein_g, unit: 'g', digits: '1.1-1', sub: false },
       { label: 'Carboidrati', value: v.carbs_g, unit: 'g', digits: '1.1-1', sub: false },
+      { label: 'di cui zuccheri', value: v.sugars_g, unit: 'g', digits: '1.1-1', sub: true },
       { label: 'di cui fibre', value: v.fiber_g, unit: 'g', digits: '1.1-1', sub: true },
       { label: 'Grassi', value: v.fat_g, unit: 'g', digits: '1.1-1', sub: false },
+      { label: 'di cui saturi', value: v.saturated_fat_g, unit: 'g', digits: '1.1-2', sub: true },
       { label: 'Calcio', value: v.calcium_mg, unit: 'mg', digits: '1.0-0', sub: false },
       { label: 'Colesterolo', value: v.cholesterol_mg, unit: 'mg', digits: '1.0-0', sub: false },
+      { label: 'Sodio', value: v.sodium_mg, unit: 'mg', digits: '1.0-0', sub: false },
     ];
   });
 
