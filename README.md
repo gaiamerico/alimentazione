@@ -13,6 +13,8 @@ Angular 22 (standalone, Signals, Reactive Forms, zoneless) · Tailwind CSS 4 · 
 - **Bilancio pasto**: composizione del pasto con grammature, totali e rapporto molare Ca:Ox (stima teorica: insufficiente / sufficiente / ottimo), alimenti ricchi di calcio con cui raggiungere il rapporto 2:1, **contributi principali** (i primi tre alimenti per ossalati, calcio e colesterolo, con la quota sul totale) e **calcio per provenienza** (da alimenti ad alto contenuto di ossalati o da altri).
 - **Nutrienti**: kcal, proteine, carboidrati, zuccheri, fibre, grassi, grassi saturi, calcio, colesterolo, sodio. Zuccheri, grassi saturi e sodio possono mancare: l'app scrive «dato non disponibile» e segna come *parziale* un totale che non comprende tutti gli alimenti.
 - **Scheda alimento**: fonte dei nutrienti, fonte degli ossalati e affidabilità; quando esiste una voce corrispondente, il dato della **lista Harvard** (mg per porzione e fascia della fonte, revisione novembre 2023).
+- **Tutta la lista Harvard nel catalogo**: le 289 voci sono alimenti cercabili. Quelle senza una scheda completa hanno solo il dato della lista (mg per porzione, es. «½ cup»): nutrienti e ossalato per 100 g restano vuoti («dato non disponibile», mai zero). Il peso della porzione non viene stimato né salvato: dove la conversione è certa (once; bevande, volume ≈ peso) l'app calcola sul momento una stima per 100 g, segnata con «≈»; altrove mostra il dato per porzione. Nei totali di pasto e diario gli alimenti senza dato restano fuori e il totale è segnato come *parziale*.
+- **Completa i dati online**: quando un alimento trovato ha dati mancanti, l'utente autenticato può chiedere all'assistente di cercarli. I valori entrano nell'alimento solo dopo la verifica di una persona.
 - **Codice a barre**: scansione dei prodotti confezionati con la fotocamera (o codice digitato a mano) e scheda con i valori dell'etichetta da Open Food Facts; segnala gli ingredienti che nel catalogo sono ricchi di ossalati (vedi [Prodotti confezionati](#prodotti-confezionati-codice-a-barre)).
 - **Account** (email/password, Google OAuth, recupero password), **preferiti** e **diario** giornaliero con totali e bilancio per pasto.
 - **Assistente per gli alimenti mancanti**: se la ricerca non trova nulla, un agente cerca online ossalati e valori nutrizionali e propone la scheda; entra nel catalogo solo dopo la tua verifica (vedi [Assistente](#assistente-per-gli-alimenti-mancanti)).
@@ -26,10 +28,12 @@ Angular 22 (standalone, Signals, Reactive Forms, zoneless) · Tailwind CSS 4 · 
 │   ├── migrations/20261115000000_food_agent.sql  # oxalate_reference, food_candidates, approvazione
 │   ├── migrations/20261116000000_extra_nutrients.sql  # grassi saturi, zuccheri, sodio; campi di arricchimento Harvard
 │   ├── migrations/20261117000000_harvard_link_packaged_products.sql  # alimento → voce Harvard; packaged_products
+│   ├── migrations/20261118000000_harvard_catalog.sql  # valori nullable in foods; completamento di un alimento esistente
 │   ├── seed.sql                                  # 148 alimenti (idempotente, upsert su name_it)
 │   ├── seed_oxalate_reference.sql                # lista Harvard: 289 alimenti, mg di ossalato per porzione
 │   ├── seed_oxalate_reference_it.sql             # nome italiano e stato di preparazione delle 289 voci
 │   ├── seed_harvard_links.sql                    # alimento del catalogo → voce Harvard (62 corrispondenze curate)
+│   ├── seed_harvard_foods.sql                    # le voci Harvard senza corrispondenza diventano alimenti (campi vuoti)
 │   ├── functions/resolve-food/                   # Edge Function dell'assistente (index · agent · prompt · validate)
 │   └── functions/lookup-barcode/                 # Edge Function codice a barre → Open Food Facts (index · product)
 ├── scripts/
@@ -66,7 +70,7 @@ Angular 22 (standalone, Signals, Reactive Forms, zoneless) · Tailwind CSS 4 · 
 
 ## 1. Database Supabase
 
-**Da dashboard:** SQL Editor → esegui nell'ordine i file di `supabase/migrations/`, poi, in quest'ordine, `supabase/seed.sql`, `supabase/seed_oxalate_reference.sql`, `supabase/seed_oxalate_reference_it.sql` e `supabase/seed_harvard_links.sql` (collega gli alimenti del catalogo alle voci Harvard: va eseguito dopo la lista).
+**Da dashboard:** SQL Editor → esegui nell'ordine i file di `supabase/migrations/`, poi, in quest'ordine, `supabase/seed.sql`, `supabase/seed_oxalate_reference.sql`, `supabase/seed_oxalate_reference_it.sql`, `supabase/seed_harvard_links.sql` (collega gli alimenti del catalogo alle voci Harvard: va eseguito dopo la lista) e `supabase/seed_harvard_foods.sql` (le altre voci Harvard entrano nel catalogo con i campi vuoti: va eseguito per ultimo).
 
 **Da CLI:**
 
@@ -80,9 +84,9 @@ Cosa crea lo schema:
 
 | Oggetto | Note |
 |---|---|
-| `foods` | catalogo per 100 g; colonna `search` (tsvector `italian` + `unaccent`, pesi A/B/C); indici GIN FTS e trigram. `saturated_fat_g`, `sugars_g`, `sodium_mg` sono nullable: NULL = dato non disponibile, non zero. `oxalate_reference_id` punta alla voce Harvard dello stesso alimento, se c'è |
+| `foods` | catalogo per 100 g; colonna `search` (tsvector `italian` + `unaccent`, pesi A/B/C); indici GIN FTS e trigram. Nutrienti, `oxalate_mg` e fonti sono nullable: NULL = dato non disponibile, non zero (le voci entrate dalla sola lista Harvard hanno solo nome, categoria e collegamento). `oxalate_reference_id` punta alla voce Harvard dello stesso alimento, se c'è |
 | `oxalate_reference` | lista Harvard: mg **per porzione**, fascia, nome italiano, preparazione; `fdc_id`, `serving_g`, `oxalate_mg_100g` compilati solo con pesi USDA verificati |
-| `food_candidates` | proposte dell'assistente in attesa di verifica |
+| `food_candidates` | proposte dell'assistente in attesa di verifica; `target_food_id` = alimento già in catalogo che la proposta completa |
 | `packaged_products` | cache dei prodotti confezionati letti da Open Food Facts (chiave: codice a barre) |
 | `favorites` | PK `(user_id, food_id)`; `user_id` default `auth.uid()` |
 | `diary_entries` | data, pasto (`colazione/pranzo/cena/spuntino`), grammi (0–5000] |
@@ -123,10 +127,10 @@ Da CLI: `npx vercel` (anteprima) e `npx vercel --prod`.
 Quando la ricerca non trova un alimento, l'utente autenticato può chiedere all'assistente di cercarlo online.
 
 ```
-ricerca senza risultati → Edge Function resolve-food → agente (Claude)
+ricerca senza risultati → Edge Function resolve-food → agente (Gemini)
      ├─ lista Harvard (tabella oxalate_reference, mg per porzione)
      ├─ USDA FoodData Central (nutrienti per 100 g e pesi delle porzioni)
-     └─ ricerca web (studi, enti clinici, tabelle CREA)
+     └─ ricerca web con Tavily (studi, enti clinici, tabelle CREA)
 → food_candidates (stato "da_verificare") → verifica umana → foods
 ```
 
@@ -143,21 +147,23 @@ npx supabase db push                                        # applica le migrazi
 psql "$DATABASE_URL" -f supabase/seed_oxalate_reference.sql # oppure incollalo nello SQL Editor
 psql "$DATABASE_URL" -f supabase/seed_oxalate_reference_it.sql
 psql "$DATABASE_URL" -f supabase/seed_harvard_links.sql     # dopo la lista: collega gli alimenti alle voci Harvard
-npx supabase secrets set ANTHROPIC_API_KEY=sk-ant-...       # chiave da console.anthropic.com
+psql "$DATABASE_URL" -f supabase/seed_harvard_foods.sql     # dopo i collegamenti: le altre voci Harvard entrano nel catalogo
+npx supabase secrets set GEMINI_API_KEY=...                 # chiave da aistudio.google.com
+npx supabase secrets set TAVILY_API_KEY=...                 # ricerca web, chiave da app.tavily.com
 npx supabase secrets set FDC_API_KEY=...                    # gratuita, api.data.gov (consigliata)
 npx supabase functions deploy resolve-food
 ```
 
-La chiave Anthropic vive solo nei secrets di Supabase: non va in `.env` del frontend né su Vercel.
+Le chiavi Gemini e Tavily vivono solo nei secrets di Supabase: non vanno in `.env` del frontend né su Vercel. Se preferisci, il secret di Gemini può chiamarsi `GOOGLE_API_KEY`.
 
-Modello predefinito `claude-sonnet-5-5` con ricerca web `web_search_20260209` (secrets opzionali `ANTHROPIC_MODEL`, `ANTHROPIC_EFFORT`, default `medium`). La ricerca ha una scadenza interna di 135 secondi: il limite di durata delle Edge Function è 150 s sul piano gratuito di Supabase e 400 s sui piani a pagamento.
+Modello predefinito `gemini-3.5-flash-lite` (API `generateContent`); secrets opzionali `GEMINI_MODEL` e `GEMINI_THINKING_BUDGET` (`-1` dinamico · `0` spento · numero di token; default `-1`). L'agente fa due tipi di chiamata a Gemini: il ciclo principale con le funzioni (`cerca_web`, lista Harvard, USDA) e la risposta finale, in JSON vincolato da schema (`responseJsonSchema`). `cerca_web` non passa da Gemini: chiama la Search API di Tavily (`https://api.tavily.com/search`, profondità `advanced`, 2 crediti per ricerca) e rimanda al modello URL ed estratti delle pagine trovate. La ricerca ha una scadenza interna di 135 secondi: il limite di durata delle Edge Function è 150 s sul piano gratuito di Supabase e 400 s sui piani a pagamento.
 
 ### Misurare l'affidabilità
 
 ```bash
 node scripts/enrich-reference.mjs --apply                          # prima: pesi delle porzioni Harvard
-ANTHROPIC_API_KEY=sk-ant-... npm run eval:agent -- --n 5            # prova ridotta: guarda il consumo
-ANTHROPIC_API_KEY=sk-ant-... npm run eval:agent -- --out eval.json  # 50 alimenti
+GEMINI_API_KEY=... npm run eval:agent -- --n 5            # prova ridotta: guarda il consumo
+GEMINI_API_KEY=... npm run eval:agent -- --out eval.json  # 50 alimenti
 ```
 
 Lo script fa cercare all'agente alimenti della lista Harvard **senza** lo strumento Harvard e confronta il risultato con il valore della lista alla stessa porzione: percentuale di fasce corrette, errore mediano in mg, alimenti alti sottostimati. Se le fasce corrette sono poche, l'agente non è pronto per gli alimenti che la lista non copre e va reso più prudente in `prompt.ts`. Ogni alimento è una ricerca completa a pagamento.
@@ -166,7 +172,7 @@ Lo script fa cercare all'agente alimenti della lista Harvard **senza** lo strume
 
 ```bash
 npm run candidates                      # elenca le proposte da verificare, con fonti e note dell'agente
-npm run candidates -- --approve 12      # pubblica nel catalogo
+npm run candidates -- --approve 12      # pubblica nel catalogo (o completa l'alimento esistente)
 npm run candidates -- --reject 12 --note "valore non riscontrato"
 npm run export:catalog                  # dopo un'approvazione: aggiorna il catalogo offline
 ```

@@ -29,15 +29,16 @@ export interface Proposal {
   saturated_fat_g: number | null;
   sugars_g: number | null;
   sodium_mg: number | null;
-  oxalate_mg: number;
+  /** null solo nel completamento di un alimento esistente, se l'ossalato per 100 g non è ricavabile. */
+  oxalate_mg: number | null;
   oxalate_min_mg: number | null;
   oxalate_max_mg: number | null;
-  oxalate_basis: OxalateBasis;
-  oxalate_confidence: Confidence;
+  oxalate_basis: OxalateBasis | null;
+  oxalate_confidence: Confidence | null;
   default_portion_g: number;
   portion_label: string | null;
   nutrient_source: string;
-  oxalate_source: string;
+  oxalate_source: string | null;
   notes: string | null;
   agent_notes: string;
   sources: ProposalSource[];
@@ -51,6 +52,11 @@ export interface ValidationContext {
   seenUrls: ReadonlySet<string>;
   usedHarvard: boolean;
   usedUsdaIds: ReadonlySet<number>;
+  /**
+   * Completamento di un alimento già in catalogo: l'ossalato per 100 g può restare null
+   * (resta valido il dato per porzione della lista Harvard) invece di essere stimato.
+   */
+  allowMissingOxalate?: boolean;
 }
 
 export type ValidationResult = { ok: true; proposal: Proposal } | { ok: false; errors: string[] };
@@ -92,14 +98,17 @@ export function validateProposal(input: Record<string, unknown>, ctx: Validation
   const name_it = text(input['name_it'], 80);
   if (name_it.length < 2) errors.push('name_it mancante.');
   else if (ctx.existingNames.has(normalizeText(name_it)))
-    errors.push(`"${name_it}" è già in catalogo: usa segnala_esito con outcome "gia_presente".`);
+    errors.push(`"${name_it}" è già in catalogo: rispondi con esito "gia_presente" e il suo food_id.`);
 
   const category = text(input['category'], 60);
   if (!ctx.categories.includes(category)) errors.push(`category deve essere una di: ${ctx.categories.join(', ')}.`);
 
+  const noOxalate = ctx.allowMissingOxalate === true && (input['oxalate_mg'] === null || input['oxalate_mg'] === undefined);
+
   const nums: Record<string, number> = {};
   for (const [key, [min, max]] of Object.entries(LIMITS)) {
     const v = input[key];
+    if (key === 'oxalate_mg' && noOxalate) continue;
     if (typeof v !== 'number' || !Number.isFinite(v)) errors.push(`${key} mancante o non numerico.`);
     else if (v < min || v > max) errors.push(`${key} = ${v} fuori dall'intervallo plausibile ${min}–${max} (valori per 100 g).`);
     else nums[key] = round1(v);
@@ -137,18 +146,19 @@ export function validateProposal(input: Record<string, unknown>, ctx: Validation
     errors.push(`saturated_fat_g (${saturatedFat}) supera i grassi totali (${nums['fat_g']}).`);
   if (sugars !== null && nums['carbs_g'] !== undefined && sugars > nums['carbs_g'] + 0.1)
     errors.push(`sugars_g (${sugars}) supera i carboidrati totali (${nums['carbs_g']}).`);
-  const oxMin = optionalNum('oxalate_min_mg');
-  const oxMax = optionalNum('oxalate_max_mg');
+  const oxMin = noOxalate ? null : optionalNum('oxalate_min_mg');
+  const oxMax = noOxalate ? null : optionalNum('oxalate_max_mg');
   if (oxMin !== null && oxMax !== null && oxMin > oxMax) errors.push('oxalate_min_mg è maggiore di oxalate_max_mg.');
   if (nums['oxalate_mg'] !== undefined) {
     if (oxMin !== null && nums['oxalate_mg'] < oxMin) errors.push('oxalate_mg è sotto oxalate_min_mg.');
     if (oxMax !== null && nums['oxalate_mg'] > oxMax) errors.push('oxalate_mg è sopra oxalate_max_mg.');
   }
 
-  const basis = input['oxalate_basis'];
-  if (basis !== 'misurato' && basis !== 'derivato' && basis !== 'stimato') errors.push('oxalate_basis non valido.');
-  let confidence = input['oxalate_confidence'];
-  if (confidence !== 'alta' && confidence !== 'media' && confidence !== 'bassa') errors.push('oxalate_confidence non valido.');
+  // Senza ossalato per 100 g non ci sono né base né confidenza: qualunque valore proposto si ignora.
+  const basis = noOxalate ? null : input['oxalate_basis'];
+  if (!noOxalate && basis !== 'misurato' && basis !== 'derivato' && basis !== 'stimato') errors.push('oxalate_basis non valido.');
+  let confidence = noOxalate ? null : input['oxalate_confidence'];
+  if (!noOxalate && confidence !== 'alta' && confidence !== 'media' && confidence !== 'bassa') errors.push('oxalate_confidence non valido.');
 
   const rawSources = Array.isArray(input['sources']) ? (input['sources'] as Record<string, unknown>[]) : [];
   const sources: ProposalSource[] = [];
@@ -172,7 +182,7 @@ export function validateProposal(input: Record<string, unknown>, ctx: Validation
     });
   }
   const oxalateSources = sources.filter((s) => s.used_for === 'ossalato');
-  if (oxalateSources.length === 0) errors.push('Serve almeno una fonte con used_for "ossalato".');
+  if (!noOxalate && oxalateSources.length === 0) errors.push('Serve almeno una fonte con used_for "ossalato".');
   if (!sources.some((s) => s.used_for === 'nutrienti')) errors.push('Serve almeno una fonte con used_for "nutrienti".');
 
   const reasoning = text(input['reasoning'], 2000);
@@ -182,6 +192,7 @@ export function validateProposal(input: Record<string, unknown>, ctx: Validation
 
   // Regole di prudenza applicate dal codice, non lasciate al modello.
   const downgrades: string[] = [];
+  if (noOxalate) downgrades.push('ossalato per 100 g non ricavato: resta il solo dato per porzione della lista Harvard');
   if (basis === 'stimato' && confidence !== 'bassa') {
     confidence = 'bassa';
     downgrades.push('confidenza portata a "bassa" perché il valore è stimato');
@@ -220,15 +231,15 @@ export function validateProposal(input: Record<string, unknown>, ctx: Validation
       saturated_fat_g: saturatedFat,
       sugars_g: sugars,
       sodium_mg: sodium,
-      oxalate_mg: nums['oxalate_mg'],
+      oxalate_mg: noOxalate ? null : nums['oxalate_mg'],
       oxalate_min_mg: oxMin,
       oxalate_max_mg: oxMax,
-      oxalate_basis: basis as OxalateBasis,
-      oxalate_confidence: confidence as Confidence,
+      oxalate_basis: basis as OxalateBasis | null,
+      oxalate_confidence: confidence as Confidence | null,
       default_portion_g: nums['default_portion_g'],
       portion_label: text(input['portion_label'], 60) || null,
       nutrient_source: text(input['nutrient_source'], 120) || 'USDA FoodData Central',
-      oxalate_source: text(input['oxalate_source'], 120) || 'Stima da letteratura',
+      oxalate_source: noOxalate ? null : text(input['oxalate_source'], 120) || 'Stima da letteratura',
       notes: text(input['notes'], 300) || null,
       agent_notes,
       sources,

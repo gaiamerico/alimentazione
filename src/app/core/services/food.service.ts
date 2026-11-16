@@ -3,12 +3,12 @@ import { Food, HarvardReference, SearchFilters } from '../models/food.model';
 import { HIGH_CALCIUM_MIN, normalizeText, OXALATE_LOW_MAX } from '../utils/nutrition';
 import { SupabaseService } from './supabase.service';
 
-// v2: il catalogo include grassi saturi, zuccheri, sodio e la voce Harvard collegata.
-const CACHE_KEY = 'nutriossalati:catalogo:v2';
-const OLD_CACHE_KEYS = ['nutriossalati:catalogo:v1'];
+// v3: i valori possono essere null (voci della lista Harvard ancora da completare).
+const CACHE_KEY = 'nutriossalati:catalogo:v3';
+const OLD_CACHE_KEYS = ['nutriossalati:catalogo:v1', 'nutriossalati:catalogo:v2'];
 
 /** Alimento con la voce Harvard collegata (solo le voci collegate sono leggibili: vedi RLS). */
-const FOOD_SELECT = '*, harvard:oxalate_reference(name_en,name_it,serving,oxalate_mg_serving,tier,serving_g)';
+export const FOOD_SELECT = '*, harvard:oxalate_reference(name_en,name_it,serving,oxalate_mg_serving,tier,serving_g)';
 
 /**
  * Catalogo e ricerca alimenti.
@@ -75,10 +75,21 @@ export class FoodService {
         },
         { get: true }, // GET → risposta cacheabile dal service worker
       );
-      if (!error && data) return (data as Food[]).map(normalizeFood);
+      if (!error && data) return this.withHarvard((data as Food[]).map(normalizeFood));
     }
     await this.loadCatalog();
     return this.localSearch(filters, limit);
+  }
+
+  /**
+   * La RPC di ricerca restituisce le righe di `foods` senza la voce Harvard collegata:
+   * si prende dal catalogo (caricandolo, se serve, quando tra i risultati ci sono
+   * alimenti che hanno solo il dato Harvard per porzione).
+   */
+  private async withHarvard(foods: Food[]): Promise<Food[]> {
+    if (this._catalog().length === 0 && foods.some((f) => f.oxalate_mg === null)) await this.loadCatalog();
+    const byId = this.catalogById();
+    return foods.map((f) => (f.harvard ? f : { ...f, harvard: byId.get(f.id)?.harvard ?? null }));
   }
 
   localSearch(filters: SearchFilters, limit = 60): Food[] {
@@ -86,8 +97,9 @@ export class FoodService {
     const scored: { food: Food; score: number }[] = [];
 
     for (const food of this._catalog()) {
-      if (filters.lowOxalate && !(food.oxalate_mg < OXALATE_LOW_MAX)) continue;
-      if (filters.highCalcium && !(food.calcium_mg > HIGH_CALCIUM_MIN)) continue;
+      // Come nella RPC: un dato mancante non soddisfa nessun filtro.
+      if (filters.lowOxalate && !(food.oxalate_mg !== null && food.oxalate_mg < OXALATE_LOW_MAX)) continue;
+      if (filters.highCalcium && !(food.calcium_mg !== null && food.calcium_mg > HIGH_CALCIUM_MIN)) continue;
       if (filters.noCholesterol && food.cholesterol_mg !== 0) continue;
       if (filters.category && food.category !== filters.category) continue;
 
@@ -132,8 +144,7 @@ export class FoodService {
 
 /** PostgREST restituisce i `numeric` come numeri, ma normalizziamo per sicurezza. */
 export function normalizeFood(raw: Food): Food {
-  const num = (v: unknown) => (typeof v === 'number' ? v : Number(v) || 0);
-  // Nutrienti facoltativi: null resta null ("dato non disponibile"), non diventa zero.
+  // null resta null ("dato non disponibile"), non diventa zero.
   const optional = (v: unknown): number | null => {
     if (v === null || v === undefined || v === '') return null;
     const n = Number(v);
@@ -141,18 +152,21 @@ export function normalizeFood(raw: Food): Food {
   };
   return {
     ...raw,
-    kcal: num(raw.kcal),
-    protein_g: num(raw.protein_g),
-    carbs_g: num(raw.carbs_g),
-    fat_g: num(raw.fat_g),
-    fiber_g: num(raw.fiber_g),
-    calcium_mg: num(raw.calcium_mg),
-    cholesterol_mg: num(raw.cholesterol_mg),
+    kcal: optional(raw.kcal),
+    protein_g: optional(raw.protein_g),
+    carbs_g: optional(raw.carbs_g),
+    fat_g: optional(raw.fat_g),
+    fiber_g: optional(raw.fiber_g),
+    calcium_mg: optional(raw.calcium_mg),
+    cholesterol_mg: optional(raw.cholesterol_mg),
     saturated_fat_g: optional(raw.saturated_fat_g),
     sugars_g: optional(raw.sugars_g),
     sodium_mg: optional(raw.sodium_mg),
-    oxalate_mg: num(raw.oxalate_mg),
-    default_portion_g: num(raw.default_portion_g) || 100,
+    oxalate_mg: optional(raw.oxalate_mg),
+    oxalate_confidence: raw.oxalate_confidence ?? null,
+    nutrient_source: raw.nutrient_source ?? null,
+    oxalate_source: raw.oxalate_source ?? null,
+    default_portion_g: optional(raw.default_portion_g) || 100,
     harvard: normalizeHarvard(raw.harvard),
   };
 }

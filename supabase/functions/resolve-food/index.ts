@@ -1,12 +1,12 @@
 // Edge Function "resolve-food"
 //
-// Chiamata dall'app quando la ricerca non trova un alimento. Un agente (Claude con
-// ricerca web, lista Harvard e USDA FoodData Central) ricostruisce la scheda e la
+// Chiamata dall'app quando la ricerca non trova un alimento. Un agente (Gemini con
+// ricerca web Tavily, lista Harvard e USDA FoodData Central) ricostruisce la scheda e la
 // salva in `food_candidates` con stato "da_verificare". Nulla entra in `foods`
 // senza l'approvazione di una persona (vedi scripts/review-candidates.mjs).
 //
-// Secrets richiesti:  ANTHROPIC_API_KEY
-// Opzionali:          ANTHROPIC_MODEL (default claude-sonnet-5-5), ANTHROPIC_EFFORT (default medium),
+// Secrets richiesti:  GEMINI_API_KEY (in alternativa GOOGLE_API_KEY), TAVILY_API_KEY (ricerca web)
+// Opzionali:          GEMINI_MODEL (default gemini-3.5-flash-lite), GEMINI_THINKING_BUDGET (default -1 = dinamico),
 //                     FDC_API_KEY (default DEMO_KEY), FOOD_AGENT_DAILY_LIMIT (default 5 richieste
 //                     per utente al giorno)
 // SUPABASE_URL e SUPABASE_SERVICE_ROLE_KEY sono forniti da Supabase.
@@ -15,20 +15,22 @@
 // rilegge la riga in `food_candidates` finché lo stato cambia.
 
 import { createClient, type SupabaseClient } from 'npm:@supabase/supabase-js@2';
-import { runAgent, type AgentOutcome } from './agent.ts';
+import { runAgent, type AgentOutcome, type EnrichTarget } from './agent.ts';
 import { normalizeText } from './validate.ts';
 
 declare const EdgeRuntime: { waitUntil(promise: Promise<unknown>): void } | undefined;
 
 const SUPABASE_URL = Deno.env.get('SUPABASE_URL') ?? '';
 const SERVICE_ROLE_KEY = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY') ?? '';
-const ANTHROPIC_API_KEY = Deno.env.get('ANTHROPIC_API_KEY') ?? '';
-const MODEL = Deno.env.get('ANTHROPIC_MODEL') ?? 'claude-sonnet-5-5';
-const EFFORT = Deno.env.get('ANTHROPIC_EFFORT') ?? 'medium';
+const GEMINI_API_KEY = Deno.env.get('GEMINI_API_KEY') || Deno.env.get('GOOGLE_API_KEY') || '';
+const TAVILY_API_KEY = Deno.env.get('TAVILY_API_KEY') ?? '';
+const MODEL = Deno.env.get('GEMINI_MODEL') ?? 'gemini-3.5-flash-lite';
+// Token di ragionamento: -1 = dinamico, 0 = spento. Valore non numerico = default del modello.
+const THINKING_BUDGET = Number(Deno.env.get('GEMINI_THINKING_BUDGET') ?? -1);
 const FDC_API_KEY = Deno.env.get('FDC_API_KEY') ?? 'DEMO_KEY';
 const DAILY_LIMIT = Number(Deno.env.get('FOOD_AGENT_DAILY_LIMIT') ?? 5) || 5;
 
-const MAX_SEARCHES = 6; // ricerche web per ricerca
+const MAX_SEARCHES = 6; // ricerche web (Tavily) per ogni alimento
 const DEADLINE_MS = 135_000; // sotto il limite di durata delle Edge Function
 const STALE_AFTER_MS = 5 * 60_000;
 
@@ -38,7 +40,10 @@ const CORS = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 };
 
-const PUBLIC_COLUMNS = 'id,query,status,name_it,existing_food_id,food_id,agent_notes';
+const PUBLIC_COLUMNS = 'id,query,status,name_it,existing_food_id,food_id,target_food_id,agent_notes';
+
+/** Valori per 100 g che un alimento del catalogo può non avere ancora. */
+const COMPLETABLE = ['kcal', 'protein_g', 'carbs_g', 'fat_g', 'fiber_g', 'calcium_mg', 'cholesterol_mg', 'oxalate_mg'] as const;
 
 type Json = Record<string, unknown>;
 
@@ -50,7 +55,8 @@ Deno.serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response('ok', { headers: CORS });
   if (req.method !== 'POST') return json({ error: 'Metodo non consentito.' }, 405);
   if (!SUPABASE_URL || !SERVICE_ROLE_KEY) return json({ error: 'Funzione non configurata.' }, 500);
-  if (!ANTHROPIC_API_KEY) return json({ error: 'Assistente non configurato (manca ANTHROPIC_API_KEY).' }, 503);
+  if (!GEMINI_API_KEY) return json({ error: 'Assistente non configurato (manca GEMINI_API_KEY).' }, 503);
+  if (!TAVILY_API_KEY) return json({ error: 'Assistente non configurato (manca TAVILY_API_KEY).' }, 503);
 
   const admin = createClient(SUPABASE_URL, SERVICE_ROLE_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
 
@@ -60,15 +66,35 @@ Deno.serve(async (req) => {
   const user = userData?.user;
   if (userError || !user) return json({ error: 'Accedi per chiedere una ricerca all\'assistente.' }, 401);
 
-  let query = '';
+  // Due richieste possibili: { query } = alimento che manca dal catalogo;
+  // { food_id } = alimento già in catalogo a cui mancano dei dati.
+  let body: Json;
   try {
-    const body = await req.json();
-    query = typeof body?.query === 'string' ? body.query.replace(/\s+/g, ' ').trim() : '';
+    body = ((await req.json()) ?? {}) as Json;
   } catch {
     return json({ error: 'Richiesta non valida.' }, 400);
   }
-  const queryNorm = normalizeText(query);
-  if (query.length > 60 || queryNorm.length < 3) return json({ error: 'Scrivi il nome di un alimento (da 3 a 60 caratteri).' }, 400);
+  let query = '';
+  let target: EnrichTarget | null = null;
+  if (body['food_id'] !== undefined && body['food_id'] !== null) {
+    const foodId = Number(body['food_id']);
+    if (!Number.isInteger(foodId) || foodId <= 0) return json({ error: 'Alimento non valido.' }, 400);
+    try {
+      target = await loadTarget(admin, foodId);
+    } catch (e) {
+      console.error('loadTarget', foodId, e);
+      return json({ error: 'Impossibile leggere l\'alimento dal catalogo.' }, 500);
+    }
+    if (!target) return json({ error: 'Alimento non trovato nel catalogo.' }, 404);
+    if (!Object.values(target.known).some((v) => v === null)) return json({ error: 'Questo alimento ha già tutti i dati.' }, 400);
+    query = target.name_it.replace(/\s+/g, ' ').trim().slice(0, 80);
+  } else {
+    query = typeof body['query'] === 'string' ? body['query'].replace(/\s+/g, ' ').trim() : '';
+  }
+  // Chiave dei doppioni: per un completamento è l'alimento, non il testo, così non si
+  // confonde con la ricerca di un alimento nuovo che ha lo stesso nome.
+  const queryNorm = target ? `completa alimento ${target.id}` : normalizeText(query);
+  if (!target && (query.length > 60 || queryNorm.length < 3)) return json({ error: 'Scrivi il nome di un alimento (da 3 a 60 caratteri).' }, 400);
 
   // Ricerche rimaste appese (funzione interrotta): liberano il termine.
   await admin
@@ -92,7 +118,7 @@ Deno.serve(async (req) => {
 
   const { data: created, error: insertError } = await admin
     .from('food_candidates')
-    .insert({ requested_by: user.id, query, query_norm: queryNorm, status: 'in_ricerca', model: MODEL })
+    .insert({ requested_by: user.id, query, query_norm: queryNorm, status: 'in_ricerca', model: MODEL, target_food_id: target?.id ?? null })
     .select(PUBLIC_COLUMNS + ',requested_by')
     .single();
   if (insertError || !created) {
@@ -105,7 +131,7 @@ Deno.serve(async (req) => {
   }
 
   const row = created as unknown as Json & { id: number };
-  const job = runAndStore(admin, row.id, query);
+  const job = runAndStore(admin, row.id, query, target);
   if (typeof EdgeRuntime !== 'undefined') EdgeRuntime.waitUntil(job);
   else await job; // esecuzione locale senza background task
 
@@ -132,6 +158,7 @@ function forUser(row: Json, userId: string): Json {
     name_it: row['name_it'] ?? null,
     existing_food_id: row['existing_food_id'] ?? null,
     food_id: row['food_id'] ?? null,
+    target_food_id: row['target_food_id'] ?? null,
     agent_notes: own ? (row['agent_notes'] ?? null) : null,
     shared: !own,
   };
@@ -141,12 +168,35 @@ function forUser(row: Json, userId: string): Json {
 // Agente
 // ---------------------------------------------------------------------
 
-async function runAndStore(admin: SupabaseClient, candidateId: number, query: string): Promise<void> {
+/** Legge l'alimento da completare, con i valori già presenti e la voce Harvard collegata. */
+async function loadTarget(admin: SupabaseClient, foodId: number): Promise<EnrichTarget | null> {
+  const { data, error } = await admin
+    .from('foods')
+    .select(`id,name_it,name_en,category,${COMPLETABLE.join(',')},harvard:oxalate_reference(name_en,serving,oxalate_mg_serving)`)
+    .eq('id', foodId)
+    .maybeSingle();
+  if (error) throw new Error(error.message);
+  if (!data) return null;
+  const row = data as Json;
+  const harvard = (Array.isArray(row['harvard']) ? row['harvard'][0] : row['harvard']) as Json | null | undefined;
+  return {
+    id: Number(row['id']),
+    name_it: String(row['name_it']),
+    name_en: typeof row['name_en'] === 'string' ? row['name_en'] : null,
+    category: String(row['category']),
+    known: Object.fromEntries(COMPLETABLE.map((key) => [key, row[key] === null || row[key] === undefined ? null : Number(row[key])])),
+    harvard: harvard
+      ? { name_en: String(harvard['name_en']), serving: String(harvard['serving']), oxalate_mg_serving: Number(harvard['oxalate_mg_serving']) }
+      : null,
+  };
+}
+
+async function runAndStore(admin: SupabaseClient, candidateId: number, query: string, target: EnrichTarget | null): Promise<void> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), DEADLINE_MS);
   let update: Json;
   try {
-    const outcome: AgentOutcome = await resolve(admin, query, controller.signal);
+    const outcome: AgentOutcome = await resolve(admin, query, controller.signal, target);
     update =
       outcome.status === 'da_verificare'
         ? { status: 'da_verificare', ...(outcome.proposal as unknown as Json) }
@@ -173,7 +223,7 @@ async function runAndStore(admin: SupabaseClient, candidateId: number, query: st
 }
 
 /** Prepara il contesto dal database (catalogo, alimenti simili, lista Harvard) e avvia l'agente. */
-async function resolve(admin: SupabaseClient, query: string, signal: AbortSignal): Promise<AgentOutcome> {
+async function resolve(admin: SupabaseClient, query: string, signal: AbortSignal, target: EnrichTarget | null): Promise<AgentOutcome> {
   const { data: catalog, error: catalogError } = await admin.from('foods').select('id,name_it,category').limit(5000);
   if (catalogError || !catalog) throw new Error('Catalogo non leggibile.');
 
@@ -181,13 +231,15 @@ async function resolve(admin: SupabaseClient, query: string, signal: AbortSignal
 
   return runAgent({
     query,
+    target,
     signal,
     catalog: catalog as { id: number; name_it: string; category: string }[],
     similar: (similar ?? []) as { id: number; name_it: string; synonyms: string | null }[],
     harvardLookup: (term) => harvardLookup(admin, term),
-    anthropicApiKey: ANTHROPIC_API_KEY,
+    geminiApiKey: GEMINI_API_KEY,
+    tavilyApiKey: TAVILY_API_KEY,
     model: MODEL,
-    effort: EFFORT,
+    thinkingBudget: Number.isFinite(THINKING_BUDGET) ? THINKING_BUDGET : null,
     fdcApiKey: FDC_API_KEY,
     maxSearches: MAX_SEARCHES,
   });

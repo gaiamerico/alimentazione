@@ -11,6 +11,19 @@ import { Icon, IconName } from './icon';
   imports: [DecimalPipe, RouterLink, Icon],
   template: `
     @let b = balance();
+    @if (unavailable()) {
+      <!-- Nessun dato sugli ossalati: un bilancio "a zero" sembrerebbe rassicurante senza esserlo. -->
+      <section class="card p-5" aria-label="Bilancio calcio e ossalati non calcolabile">
+        <p class="text-xs font-medium tracking-wide text-stone-500 uppercase dark:text-stone-400">{{ heading() }}</p>
+        <h3 class="mt-1 flex items-center gap-2 text-lg font-semibold"><app-icon name="info" [size]="20" /> Bilancio non calcolabile</h3>
+        <p class="mt-1 text-sm text-stone-600 dark:text-stone-300">
+          Mancano gli ossalati per 100 g o il calcio: senza questi dati il confronto non si può fare.
+        </p>
+        @for (c of caveats(); track c) {
+          <p class="mt-2 text-xs leading-relaxed text-stone-500 dark:text-stone-400">{{ c }}</p>
+        }
+      </section>
+    } @else {
     <section class="card overflow-hidden" [attr.aria-label]="'Bilancio calcio e ossalati: ' + b.title">
       <header class="flex items-start gap-3 p-5" [class]="theme().header">
         <span class="grid size-10 shrink-0 place-items-center rounded-xl" [class]="theme().iconBox">
@@ -24,6 +37,15 @@ import { Icon, IconName } from './icon';
       </header>
 
       <div class="space-y-5 p-5">
+        @if (caveats().length > 0) {
+          <div class="rounded-xl bg-amber-50 p-3 text-xs leading-relaxed text-amber-900 dark:bg-amber-500/10 dark:text-amber-200" role="note">
+            <p class="flex items-center gap-1.5 font-semibold"><app-icon name="alert" [size]="14" /> Bilancio su dati incompleti</p>
+            @for (c of caveats(); track c) {
+              <p class="mt-1">{{ c }}</p>
+            }
+          </div>
+        }
+
         <!-- Barra: calcio presente rispetto al calcio consigliato (rapporto molare 2:1) -->
         <div>
           <div class="mb-2 flex items-baseline justify-between text-sm">
@@ -96,11 +118,16 @@ import { Icon, IconName } from './icon';
         </p>
       </div>
     </section>
+    }
   `,
 })
 export class BalancePanel {
   readonly balance = input.required<CalciumOxalateBalance>();
   readonly heading = input('Bilancio Calcio vs Ossalati');
+  /** Avvertenze sui dati incompleti (alimenti esclusi dal totale, ossalati stimati): vedi balanceCaveats. */
+  readonly caveats = input<readonly string[]>([]);
+  /** true quando nessun alimento ha un dato sugli ossalati: il bilancio non viene mostrato. */
+  readonly unavailable = input(false);
 
   protected readonly fill = computed(() => {
     const b = this.balance();
@@ -115,6 +142,13 @@ export class BalancePanel {
 
   protected readonly theme = computed((): { header: string; iconBox: string; bar: string; icon: IconName } => {
     switch (this.balance().status) {
+      case 'parziale':
+        return {
+          header: 'bg-stone-100 text-stone-900 dark:bg-white/5 dark:text-stone-100',
+          iconBox: 'bg-stone-500 text-white',
+          bar: 'bg-stone-400',
+          icon: 'info',
+        };
       case 'trascurabile':
       case 'ottimo':
         return {

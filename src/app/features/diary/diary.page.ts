@@ -92,9 +92,13 @@ import { OxalateBadge } from '../../shared/components/oxalate-badge';
               <header class="flex items-center justify-between gap-3 border-b border-stone-200 px-5 py-3 dark:border-white/[0.06]">
                 <h2 class="font-semibold">{{ group.label }}</h2>
                 <div class="flex items-center gap-3 text-xs text-stone-500 tabular-nums dark:text-stone-400">
-                  <span>{{ group.totals.kcal | number: '1.0-0' }} kcal</span>
-                  <span>Ca {{ group.totals.calcium_mg | number: '1.0-0' }} mg</span>
-                  <span class="size-2.5 rounded-full" [class]="balanceDot(group.balance.status)" [attr.title]="group.balance.title"></span>
+                  <span>{{ (group.totals.kcal | number: '1.0-0') ?? 'n.d.' }} kcal{{ group.totals.partial.includes('kcal') && group.totals.kcal !== null ? ' (parziale)' : '' }}</span>
+                  <span>Ca {{ (group.totals.calcium_mg | number: '1.0-0') ?? 'n.d.' }} mg{{ group.totals.partial.includes('calcium_mg') && group.totals.calcium_mg !== null ? ' (parziale)' : '' }}</span>
+                  <span
+                    class="size-2.5 rounded-full"
+                    [class]="group.unavailable ? 'bg-stone-400' : balanceDot(group.balance.status)"
+                    [attr.title]="group.unavailable ? 'Bilancio non calcolabile: mancano ossalati o calcio' : group.balance.title"
+                  ></span>
                 </div>
               </header>
               <ul class="divide-y divide-stone-100 dark:divide-white/[0.05]">
@@ -104,10 +108,14 @@ import { OxalateBadge } from '../../shared/components/oxalate-badge';
                     <div class="min-w-0 flex-1">
                       <a [routerLink]="['/alimento', entry.food.id]" class="block truncate font-medium hover:text-brand-700 dark:hover:text-brand-200">{{ entry.food.name_it }}</a>
                       <p class="text-xs text-stone-500 tabular-nums dark:text-stone-400">
-                        {{ v.kcal | number: '1.0-0' }} kcal · P {{ v.protein_g | number: '1.0-1' }} · C {{ v.carbs_g | number: '1.0-1' }} · G {{ v.fat_g | number: '1.0-1' }} · Ca {{ v.calcium_mg | number: '1.0-0' }} mg
+                        @if (v.calcium_mg === null && v.kcal === null) {
+                          valori nutrizionali non disponibili
+                        } @else {
+                          {{ (v.kcal | number: '1.0-0') ?? 'n.d.' }} kcal · P {{ (v.protein_g | number: '1.0-1') ?? 'n.d.' }} · C {{ (v.carbs_g | number: '1.0-1') ?? 'n.d.' }} · G {{ (v.fat_g | number: '1.0-1') ?? 'n.d.' }} · Ca {{ (v.calcium_mg | number: '1.0-0') ?? 'n.d.' }} mg
+                        }
                       </p>
                     </div>
-                    <app-oxalate-badge [mg]="v.oxalate_mg" [showLabel]="false" />
+                    <app-oxalate-badge [mg]="v.oxalate_mg" [estimated]="v.oxalateEstimated" [showLabel]="false" />
                     <label class="sr-only" [for]="'e-' + entry.id">Grammi</label>
                     <input
                       [id]="'e-' + entry.id"
@@ -137,7 +145,7 @@ import { OxalateBadge } from '../../shared/components/oxalate-badge';
       </div>
 
       <aside>
-        <app-balance-panel [balance]="diary.balance()" heading="Bilancio della giornata" />
+        <app-balance-panel [balance]="diary.balance()" heading="Bilancio della giornata" [caveats]="diary.balanceCaveats()" [unavailable]="diary.balanceUnavailable()" />
         <p class="mt-3 px-1 text-xs text-stone-500 dark:text-stone-400">
           Calcio e ossalati si incontrano pasto per pasto: il pallino colorato accanto a ogni pasto indica il suo bilancio teorico.
         </p>
@@ -190,6 +198,7 @@ export class DiaryPage {
   }
 
   protected balanceDot(status: string): string {
+    if (status === 'parziale') return 'bg-stone-400'; // dati incompleti: né verde né rosso
     return status === 'insufficiente' ? 'bg-rose-500' : status === 'sufficiente' ? 'bg-amber-500' : 'bg-emerald-500';
   }
 }

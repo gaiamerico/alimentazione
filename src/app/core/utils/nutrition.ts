@@ -1,4 +1,4 @@
-import { Food, HarvardTier, MealItem, MealType, NutrientTotals, OptionalNutrient } from '../models/food.model';
+import { CoreNutrient, Food, HarvardTier, MealItem, MealType, NutrientKey, NutrientTotals, OptionalNutrient } from '../models/food.model';
 
 /** Soglie ossalati (mg) usate per filtri e indicatori cromatici. */
 export const OXALATE_LOW_MAX = 25; // < 25 mg → basso
@@ -46,11 +46,14 @@ export const HARVARD_TIER_LABEL: Record<HarvardTier, string> = {
 };
 export const HARVARD_REVISION_LABEL = 'revisione novembre 2023';
 
-/** Nutrienti sempre presenti in catalogo. */
-const CORE_KEYS = ['kcal', 'protein_g', 'carbs_g', 'fat_g', 'fiber_g', 'calcium_mg', 'cholesterol_mg', 'oxalate_mg'] as const;
+/** Nutrienti presenti da sempre in catalogo; nelle voci da completare possono mancare. */
+export const CORE_KEYS: readonly CoreNutrient[] = ['kcal', 'protein_g', 'carbs_g', 'fat_g', 'fiber_g', 'calcium_mg', 'cholesterol_mg', 'oxalate_mg'];
 
-/** Nutrienti che la fonte può non riportare: null = "dato non disponibile", mai zero. */
+/** Nutrienti che la fonte può non riportare. */
 export const OPTIONAL_KEYS: readonly OptionalNutrient[] = ['saturated_fat_g', 'sugars_g', 'sodium_mg'];
+
+/** Tutti i nutrienti: per ognuno null = "dato non disponibile", mai zero. */
+export const NUTRIENT_KEYS: readonly NutrientKey[] = [...CORE_KEYS, ...OPTIONAL_KEYS];
 
 export const MISSING_VALUE_LABEL = 'dato non disponibile';
 
@@ -69,22 +72,111 @@ export function emptyTotals(): NutrientTotals {
     sugars_g: 0,
     sodium_mg: 0,
     partial: [],
+    oxalateEstimated: false,
   };
 }
 
-/** Valore facoltativo dell'alimento: null se assente (anche nei cataloghi salvati prima dell'aggiunta del campo). */
-function optionalValue(food: Food, key: OptionalNutrient): number | null {
+/** Valore per 100 g dell'alimento: null se assente (anche nei cataloghi salvati prima dell'aggiunta del campo). */
+function nutrientValue(food: Food, key: NutrientKey): number | null {
   const v = food[key] as number | null | undefined;
   return v === null || v === undefined || !Number.isFinite(Number(v)) ? null : Number(v);
+}
+
+// ---------------------------------------------------------------------
+// Ossalato per 100 g quando esiste solo il dato per porzione (lista Harvard)
+// ---------------------------------------------------------------------
+
+const OUNCE_G = 28.3495; // oncia di peso (avoirdupois): conversione esatta
+const FLUID_OUNCE_ML = 29.5735; // oncia fluida USA
+const CUP_ML = 8 * FLUID_OUNCE_ML; // tazza USA = 8 once fluide
+const FRACTIONS: Record<string, number> = { '½': 1 / 2, '¼': 1 / 4, '¾': 3 / 4, '⅓': 1 / 3, '⅔': 2 / 3, '⅛': 1 / 8 };
+
+export interface ServingWeight {
+  grams: number;
+  /** "peso": oncia di peso, conversione esatta. "volume": bevanda, 1 ml ≈ 1 g. */
+  basis: 'peso' | 'volume';
+}
+
+/**
+ * Peso in grammi di una porzione della lista Harvard, SOLO dove la conversione è certa:
+ * - once ("1 oz", "3.5 oz"): peso esatto per i solidi, volume ≈ peso per le bevande;
+ * - tazze ("1 cup") solo per le bevande.
+ * Per tutto il resto (tazze di solidi, pezzi, fette, cucchiai) restituisce null: una
+ * tazza di lattuga e una di fagioli pesano in modo molto diverso, e l'app non stima.
+ * Il risultato si calcola a video e non viene mai salvato.
+ */
+export function servingWeight(serving: string, isBeverage: boolean): ServingWeight | null {
+  const match = serving.trim().match(/^(\d+(?:[.,]\d+)?)?\s*([½¼¾⅓⅔⅛])?\s*([a-z]+)$/i);
+  if (!match || (!match[1] && !match[2])) return null;
+  const quantity = (match[1] ? Number(match[1].replace(',', '.')) : 0) + (match[2] ? FRACTIONS[match[2]] : 0);
+  if (!(quantity > 0)) return null;
+  const unit = match[3].toLowerCase();
+  if (unit === 'oz') {
+    return isBeverage ? { grams: quantity * FLUID_OUNCE_ML, basis: 'volume' } : { grams: quantity * OUNCE_G, basis: 'peso' };
+  }
+  if ((unit === 'cup' || unit === 'cups') && isBeverage) return { grams: quantity * CUP_ML, basis: 'volume' };
+  return null;
+}
+
+/** Categoria del catalogo in cui la porzione Harvard è un volume (1 ml ≈ 1 g). */
+const BEVERAGE_CATEGORY = 'Bevande';
+
+export interface OxalatePer100g {
+  mg: number;
+  /** true = ricavato a video dalla porzione Harvard, non è un dato del catalogo. */
+  estimated: boolean;
+  /** Peso attribuito alla porzione Harvard (solo per le stime). */
+  serving?: ServingWeight;
+}
+
+/**
+ * Ossalato per 100 g di un alimento: il dato del catalogo se c'è; altrimenti, se la
+ * voce Harvard collegata ha una porzione convertibile con certezza, una stima calcolata
+ * sul momento (mg per porzione / grammi della porzione × 100). null se non c'è né l'uno
+ * né l'altra.
+ */
+export function oxalatePer100g(food: Food): OxalatePer100g | null {
+  const stored = nutrientValue(food, 'oxalate_mg');
+  if (stored !== null) return { mg: stored, estimated: false };
+  const harvard = food.harvard;
+  if (!harvard) return null;
+  // Peso verificato su USDA (se presente) prima della conversione di unità.
+  const serving: ServingWeight | null =
+    harvard.serving_g !== null && harvard.serving_g > 0
+      ? { grams: harvard.serving_g, basis: 'peso' }
+      : servingWeight(harvard.serving, food.category === BEVERAGE_CATEGORY);
+  if (!serving) return null;
+  return { mg: (harvard.oxalate_mg_serving / serving.grams) * 100, estimated: true, serving };
+}
+
+/** Dati che mancano a un alimento del catalogo (da proporre alla ricerca online). */
+export interface MissingData {
+  /** Nessun ossalato per 100 g in catalogo (può esserci il dato Harvard per porzione). */
+  oxalate: boolean;
+  /** Manca almeno uno tra energia, macronutrienti, fibre, calcio e colesterolo. */
+  nutrients: boolean;
+  any: boolean;
+}
+
+export function missingData(food: Food): MissingData {
+  const oxalate = nutrientValue(food, 'oxalate_mg') === null;
+  const nutrients = CORE_KEYS.some((key) => key !== 'oxalate_mg' && nutrientValue(food, key) === null);
+  return { oxalate, nutrients, any: oxalate || nutrients };
 }
 
 /** Valori di un alimento riscalati sui grammi indicati (i dati sono per 100 g). */
 export function scaleNutrients(food: Food, grams: number): NutrientTotals {
   const factor = Math.max(0, grams || 0) / 100;
   const out = emptyTotals();
-  for (const key of CORE_KEYS) out[key] = (Number(food[key]) || 0) * factor;
-  for (const key of OPTIONAL_KEYS) {
-    const v = optionalValue(food, key);
+  for (const key of NUTRIENT_KEYS) {
+    let v = nutrientValue(food, key);
+    if (key === 'oxalate_mg' && v === null) {
+      const estimate = oxalatePer100g(food);
+      if (estimate) {
+        v = estimate.mg;
+        out.oxalateEstimated = true;
+      }
+    }
     out[key] = v === null ? null : v * factor;
     if (v === null) out.partial.push(key);
   }
@@ -92,40 +184,78 @@ export function scaleNutrients(food: Food, grams: number): NutrientTotals {
 }
 
 /**
- * Somma i nutrienti degli alimenti. Per i nutrienti facoltativi somma solo i
- * valori presenti: se a qualche alimento manca il dato il totale è segnato come
- * parziale; se manca a tutti il totale è null.
+ * Somma i nutrienti degli alimenti. Somma solo i valori presenti: se a qualche
+ * alimento manca il dato il totale è segnato come parziale; se manca a tutti il
+ * totale è null. Un insieme vuoto ha tutti i totali a zero.
  */
 export function sumTotals(items: readonly MealItem[]): NutrientTotals {
   const out = emptyTotals();
-  const present: Record<OptionalNutrient, number> = { saturated_fat_g: 0, sugars_g: 0, sodium_mg: 0 };
-  const missing: Record<OptionalNutrient, number> = { saturated_fat_g: 0, sugars_g: 0, sodium_mg: 0 };
+  const present = new Map<NutrientKey, number>();
+  const missing = new Map<NutrientKey, number>();
   for (const item of items) {
     const scaled = scaleNutrients(item.food, item.grams);
-    for (const key of CORE_KEYS) out[key] += scaled[key];
-    for (const key of OPTIONAL_KEYS) {
+    if (scaled.oxalateEstimated) out.oxalateEstimated = true;
+    for (const key of NUTRIENT_KEYS) {
       const v = scaled[key];
-      if (v === null) missing[key]++;
+      if (v === null) missing.set(key, (missing.get(key) ?? 0) + 1);
       else {
-        present[key]++;
+        present.set(key, (present.get(key) ?? 0) + 1);
         out[key] = (out[key] ?? 0) + v;
       }
     }
   }
-  for (const key of OPTIONAL_KEYS) {
-    if (missing[key] === 0) continue;
+  for (const key of NUTRIENT_KEYS) {
+    if (!missing.has(key)) continue;
     out.partial.push(key);
-    if (present[key] === 0) out[key] = null;
+    if (!present.has(key)) out[key] = null;
   }
   return out;
 }
 
 /** true se il totale del nutriente esiste ma non comprende tutti gli alimenti. */
-export function isPartial(totals: NutrientTotals, key: OptionalNutrient): boolean {
+export function isPartial(totals: NutrientTotals, key: NutrientKey): boolean {
   return totals[key] !== null && totals.partial.includes(key);
 }
 
-export type BalanceStatus = 'trascurabile' | 'ottimo' | 'sufficiente' | 'insufficiente';
+/** Bilancio calcio/ossalati dei totali di un pasto o di una giornata, prudente se i dati sono incompleti. */
+export function balanceOfTotals(totals: NutrientTotals): CalciumOxalateBalance {
+  return calciumOxalateBalance(totals.calcium_mg ?? 0, totals.oxalate_mg ?? 0, totals.partial.includes('oxalate_mg'));
+}
+
+/** true se ci sono alimenti ma nessuno ha il dato su ossalati o calcio: il bilancio non si può calcolare. */
+export function balanceUnavailable(totals: NutrientTotals, itemCount: number): boolean {
+  return itemCount > 0 && (totals.oxalate_mg === null || totals.calcium_mg === null);
+}
+
+/** Nomi degli alimenti (senza ripetizioni) a cui manca il dato, anche stimato, di un nutriente. */
+export function foodsMissing(items: readonly MealItem[], key: NutrientKey): string[] {
+  const names = new Set<string>();
+  for (const item of items) {
+    if (scaleNutrients(item.food, item.grams)[key] === null) names.add(item.food.name_it);
+  }
+  return [...names];
+}
+
+/**
+ * Avvertenze sul bilancio calcio/ossalati quando i dati non sono completi: alimenti
+ * esclusi dal totale (che è quindi una sottostima) e ossalati stimati dalla porzione Harvard.
+ */
+export function balanceCaveats(items: readonly MealItem[]): string[] {
+  const out: string[] = [];
+  const list = (names: string[]) => (names.length > 3 ? `${names.slice(0, 3).join(', ')} e altri ${names.length - 3}` : names.join(', '));
+  const noOxalate = foodsMissing(items, 'oxalate_mg');
+  if (noOxalate.length > 0)
+    out.push(`Ossalati per 100 g non disponibili per: ${list(noOxalate)}. Non entrano nel totale degli ossalati (se c'è, è una sottostima).`);
+  const noCalcium = foodsMissing(items, 'calcium_mg');
+  if (noCalcium.length > 0)
+    out.push(`Calcio non disponibile per: ${list(noCalcium)}. Non entra nel totale del calcio.`);
+  if (items.some((item) => oxalatePer100g(item.food)?.estimated))
+    out.push('Il totale degli ossalati comprende stime ricavate dalla porzione della lista Harvard (non misure per 100 g).');
+  return out;
+}
+
+/** 'parziale': il calcolo direbbe "trascurabile" o "ottimo", ma ad alcuni alimenti manca il dato sugli ossalati. */
+export type BalanceStatus = 'trascurabile' | 'ottimo' | 'sufficiente' | 'insufficiente' | 'parziale';
 
 export interface CalciumOxalateBalance {
   calcium_mg: number;
@@ -158,7 +288,7 @@ export const NEGLIGIBLE_OXALATE_MG = 10;
  * ossalati nell'intestino, ma la quota realmente legata varia da persona a persona.
  * I testi non devono promettere che il calcio "neutralizza" gli ossalati.
  */
-export function calciumOxalateBalance(calcium_mg: number, oxalate_mg: number): CalciumOxalateBalance {
+export function calciumOxalateBalance(calcium_mg: number, oxalate_mg: number, oxalateIncomplete = false): CalciumOxalateBalance {
   const ca = Math.max(0, calcium_mg);
   const ox = Math.max(0, oxalate_mg);
   const calciumToBind = ox * CALCIUM_PER_OXALATE_MG;
@@ -177,6 +307,16 @@ export function calciumOxalateBalance(calcium_mg: number, oxalate_mg: number): C
     boundPercent,
   };
 
+  // Con ossalati mancanti il totale è una sottostima: un esito rassicurante non è affidabile.
+  if (oxalateIncomplete && (ox < NEGLIGIBLE_OXALATE_MG || (molarRatio !== null && molarRatio >= 2))) {
+    return {
+      ...base,
+      status: 'parziale',
+      title: 'Bilancio parziale',
+      message:
+        'Ad alcuni alimenti manca il dato sugli ossalati per 100 g: il totale è una sottostima e il confronto con il calcio non è affidabile.',
+    };
+  }
   if (ox < NEGLIGIBLE_OXALATE_MG) {
     return {
       ...base,
@@ -231,6 +371,8 @@ export type ContributorNutrient = 'oxalate_mg' | 'calcium_mg' | 'cholesterol_mg'
 
 export interface Contributor {
   food: Food;
+  /** true se la quantità viene da una stima (ossalati dalla porzione Harvard). */
+  estimated: boolean;
   /** Quantità del nutriente portata dall'alimento, per i grammi indicati. */
   amount: number;
   /** Quota sul totale del pasto o della giornata (0–1). */
@@ -241,7 +383,7 @@ export interface Contributor {
 export function topContributors(items: readonly MealItem[], key: ContributorNutrient, limit = 3): Contributor[] {
   const byFood = new Map<number, { food: Food; amount: number }>();
   for (const item of items) {
-    const amount = scaleNutrients(item.food, item.grams)[key];
+    const amount = scaleNutrients(item.food, item.grams)[key] ?? 0;
     if (!(amount > 0)) continue;
     const entry = byFood.get(item.food.id);
     if (entry) entry.amount += amount;
@@ -252,7 +394,12 @@ export function topContributors(items: readonly MealItem[], key: ContributorNutr
   return [...byFood.values()]
     .sort((a, b) => b.amount - a.amount || a.food.name_it.localeCompare(b.food.name_it, 'it'))
     .slice(0, limit)
-    .map((e) => ({ food: e.food, amount: e.amount, share: e.amount / total }));
+    .map((e) => ({
+      food: e.food,
+      amount: e.amount,
+      share: e.amount / total,
+      estimated: key === 'oxalate_mg' && oxalatePer100g(e.food)?.estimated === true,
+    }));
 }
 
 export interface CalciumBySource {
@@ -265,8 +412,9 @@ export interface CalciumBySource {
 export function calciumBySource(items: readonly MealItem[]): CalciumBySource {
   const out: CalciumBySource = { fromHighOxalate_mg: 0, fromOthers_mg: 0 };
   for (const item of items) {
-    const calcium = scaleNutrients(item.food, item.grams).calcium_mg;
-    if (oxalateLevel(Number(item.food.oxalate_mg) || 0) === 'alto') out.fromHighOxalate_mg += calcium;
+    const calcium = scaleNutrients(item.food, item.grams).calcium_mg ?? 0;
+    // Senza ossalato per 100 g (nemmeno stimato) l'alimento non si può dire "alto".
+    if (oxalateLevel(oxalatePer100g(item.food)?.mg ?? 0) === 'alto') out.fromHighOxalate_mg += calcium;
     else out.fromOthers_mg += calcium;
   }
   return out;

@@ -1,12 +1,13 @@
 import { computed, effect, inject, Injectable, signal, untracked } from '@angular/core';
 import { DiaryEntry, MealItem, MEAL_TYPES, MealType } from '../models/food.model';
-import { calciumOxalateBalance, sumTotals, todayIso } from '../utils/nutrition';
+import { balanceCaveats, balanceOfTotals, balanceUnavailable, sumTotals, todayIso } from '../utils/nutrition';
 import { AuthService } from './auth.service';
-import { normalizeFood } from './food.service';
+import { FOOD_SELECT, normalizeFood } from './food.service';
 import { SupabaseService } from './supabase.service';
 import { ToastService } from './toast.service';
 
-const ENTRY_SELECT = 'id, food_id, entry_date, meal, grams, created_at, food:foods(*)';
+// La voce Harvard serve a stimare l'ossalato degli alimenti che non hanno il valore per 100 g.
+const ENTRY_SELECT = `id, food_id, entry_date, meal, grams, created_at, food:foods(${FOOD_SELECT})`;
 
 @Injectable({ providedIn: 'root' })
 export class DiaryService {
@@ -22,17 +23,16 @@ export class DiaryService {
   readonly loading = this._loading.asReadonly();
 
   readonly totals = computed(() => sumTotals(this._entries()));
-  readonly balance = computed(() => {
-    const t = this.totals();
-    return calciumOxalateBalance(t.calcium_mg, t.oxalate_mg);
-  });
+  readonly balance = computed(() => balanceOfTotals(this.totals()));
+  readonly balanceCaveats = computed(() => balanceCaveats(this._entries()));
+  readonly balanceUnavailable = computed(() => balanceUnavailable(this.totals(), this._entries().length));
 
   /** Voci raggruppate per pasto, nell'ordine colazione → spuntino. */
   readonly byMeal = computed(() =>
     MEAL_TYPES.map(({ value, label }) => {
       const entries = this._entries().filter((e) => e.meal === value);
       const totals = sumTotals(entries);
-      return { meal: value, label, entries, totals, balance: calciumOxalateBalance(totals.calcium_mg, totals.oxalate_mg) };
+      return { meal: value, label, entries, totals, balance: balanceOfTotals(totals), unavailable: balanceUnavailable(totals, entries.length) };
     }),
   );
 

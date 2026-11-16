@@ -1,13 +1,15 @@
 import { DecimalPipe, PercentPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
 import { MealItem } from '../../core/models/food.model';
-import { calciumBySource, Contributor, ContributorNutrient, OXALATE_HIGH_MIN, topContributors } from '../../core/utils/nutrition';
+import { calciumBySource, Contributor, ContributorNutrient, foodsMissing, OXALATE_HIGH_MIN, topContributors } from '../../core/utils/nutrition';
 
 interface Group {
   key: ContributorNutrient;
   label: string;
   tone: string;
   top: Contributor[];
+  /** Alimenti a cui manca il dato: non compaiono tra i contributi e le quote sono su un totale parziale. */
+  missing: string[];
 }
 
 /**
@@ -27,7 +29,7 @@ interface Group {
           @for (g of groups(); track g.key) {
             <div>
               <h3 class="text-xs font-medium tracking-wide text-stone-500 uppercase dark:text-stone-400">{{ g.label }}</h3>
-              @if (g.top.length === 0) {
+              @if (g.top.length === 0 && g.missing.length === 0) {
                 <p class="mt-2 text-sm text-stone-400 dark:text-stone-500">Nessun apporto</p>
               } @else {
                 <ol class="mt-2 space-y-2">
@@ -36,7 +38,7 @@ interface Group {
                       <div class="flex items-baseline justify-between gap-2 text-sm">
                         <span class="truncate">{{ c.food.name_it }}</span>
                         <span class="shrink-0 tabular-nums text-stone-500 dark:text-stone-400">
-                          {{ c.amount | number: '1.0-0' }} mg · <strong class="text-stone-900 dark:text-white">{{ c.share | percent: '1.0-0' }}</strong>
+                          {{ c.estimated ? '≈ ' : '' }}{{ c.amount | number: '1.0-0' }} mg · <strong class="text-stone-900 dark:text-white">{{ c.share | percent: '1.0-0' }}</strong>
                         </span>
                       </div>
                       <div class="mt-1 h-1.5 rounded-full bg-stone-200 dark:bg-white/10">
@@ -45,6 +47,11 @@ interface Group {
                     </li>
                   }
                 </ol>
+                @if (g.missing.length > 0) {
+                  <p class="mt-2 text-xs leading-relaxed text-amber-800 dark:text-amber-200">
+                    Dato non disponibile per: {{ g.missing.join(', ') }}.@if (g.top.length > 0) { Le quote sono calcolate sul totale parziale.}
+                  </p>
+                }
               }
             </div>
           }
@@ -88,13 +95,13 @@ export class ContributorsPanel {
   protected readonly groups = computed((): Group[] => {
     const items = this.items();
     return [
-      { key: 'oxalate_mg', label: 'Ossalati', tone: 'bg-amber-500', top: topContributors(items, 'oxalate_mg') },
-      { key: 'calcium_mg', label: 'Calcio', tone: 'bg-sky-500', top: topContributors(items, 'calcium_mg') },
-      { key: 'cholesterol_mg', label: 'Colesterolo', tone: 'bg-violet-500', top: topContributors(items, 'cholesterol_mg') },
+      { key: 'oxalate_mg', label: 'Ossalati', tone: 'bg-amber-500', top: topContributors(items, 'oxalate_mg'), missing: foodsMissing(items, 'oxalate_mg') },
+      { key: 'calcium_mg', label: 'Calcio', tone: 'bg-sky-500', top: topContributors(items, 'calcium_mg'), missing: foodsMissing(items, 'calcium_mg') },
+      { key: 'cholesterol_mg', label: 'Colesterolo', tone: 'bg-violet-500', top: topContributors(items, 'cholesterol_mg'), missing: foodsMissing(items, 'cholesterol_mg') },
     ];
   });
 
-  protected readonly hasData = computed(() => this.groups().some((g) => g.top.length > 0));
+  protected readonly hasData = computed(() => this.groups().some((g) => g.top.length > 0 || g.missing.length > 0));
 
   protected readonly calcium = computed(() => {
     const split = calciumBySource(this.items());

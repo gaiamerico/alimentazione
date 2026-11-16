@@ -1,5 +1,5 @@
 import { Food } from '../models/food.model';
-import { normalizeText, OxalateLevel, oxalateLevel } from './nutrition';
+import { normalizeText, OxalateLevel, oxalateLevel, oxalatePer100g } from './nutrition';
 
 // ---------------------------------------------------------------------
 // Codice a barre
@@ -111,8 +111,16 @@ export function findOxalateIngredients(ingredients: string | null, catalog: read
 
   const matches: { start: number; end: number; label: string; level: OxalateLevel }[] = [];
   for (const food of catalog) {
-    const level = oxalateLevel(Number(food.oxalate_mg) || 0);
-    if (level === 'basso') continue;
+    // Ossalato per 100 g (anche stimato); se manca, la fascia per porzione della lista Harvard.
+    const per100 = oxalatePer100g(food);
+    const level: OxalateLevel | null = per100
+      ? oxalateLevel(per100.mg)
+      : food.harvard?.tier === 'high'
+        ? 'alto'
+        : food.harvard?.tier === 'medium'
+          ? 'moderato'
+          : null;
+    if (level === null || level === 'basso') continue;
     const names = [ingredientName(food.name_it), ...(food.synonyms ?? '').split(',').map((s) => normalizeText(s))];
     for (const name of names) {
       const term = words(name).map(stem);

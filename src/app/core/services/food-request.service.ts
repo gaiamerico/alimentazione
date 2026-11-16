@@ -10,7 +10,7 @@ export type FoodRequestStatus =
   | 'gia_presente'
   | 'errore';
 
-/** Richiesta all'assistente per un alimento che non è in catalogo. */
+/** Richiesta all'assistente: un alimento che non è in catalogo, oppure uno da completare. */
 export interface FoodRequest {
   /** null se la stessa ricerca è già stata chiesta da un altro utente. */
   id: number | null;
@@ -19,10 +19,12 @@ export interface FoodRequest {
   name_it: string | null;
   existing_food_id: number | null;
   food_id: number | null;
+  /** Alimento del catalogo che la richiesta completa; null se è la ricerca di un alimento nuovo. */
+  target_food_id?: number | null;
   agent_notes: string | null;
 }
 
-const COLUMNS = 'id,query,status,name_it,existing_food_id,food_id,agent_notes';
+const COLUMNS = 'id,query,status,name_it,existing_food_id,food_id,target_food_id,agent_notes';
 const POLL_INTERVAL_MS = 4000;
 const POLL_TIMEOUT_MS = 180_000;
 
@@ -36,11 +38,21 @@ const POLL_TIMEOUT_MS = 180_000;
 export class FoodRequestService {
   private readonly supabase = inject(SupabaseService);
 
-  async request(query: string): Promise<FoodRequest> {
+  /** Cerca online un alimento che non è in catalogo. */
+  request(query: string): Promise<FoodRequest> {
+    return this.invoke({ query });
+  }
+
+  /** Cerca online i dati mancanti di un alimento già in catalogo. */
+  requestEnrichment(foodId: number): Promise<FoodRequest> {
+    return this.invoke({ food_id: foodId });
+  }
+
+  private async invoke(body: { query: string } | { food_id: number }): Promise<FoodRequest> {
     const client = this.supabase.client;
     if (!client) throw new Error('Assistente non disponibile: Supabase non è configurato.');
 
-    const { data, error } = await client.functions.invoke<FoodRequest>('resolve-food', { body: { query } });
+    const { data, error } = await client.functions.invoke<FoodRequest>('resolve-food', { body });
     if (error) throw new Error(await readFunctionError(error));
     if (!data) throw new Error('Risposta vuota dall\'assistente.');
     return data;

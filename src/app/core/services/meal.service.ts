@@ -1,6 +1,6 @@
 import { computed, effect, Injectable, signal } from '@angular/core';
 import { Food, MealItem } from '../models/food.model';
-import { calciumOxalateBalance, sumTotals } from '../utils/nutrition';
+import { balanceCaveats, balanceOfTotals, balanceUnavailable, sumTotals } from '../utils/nutrition';
 
 const STORAGE_KEY = 'nutriossalati:pasto:v1';
 
@@ -12,10 +12,11 @@ export class MealService {
   readonly items = this._items.asReadonly();
   readonly count = computed(() => this._items().length);
   readonly totals = computed(() => sumTotals(this._items()));
-  readonly balance = computed(() => {
-    const t = this.totals();
-    return calciumOxalateBalance(t.calcium_mg, t.oxalate_mg);
-  });
+  readonly balance = computed(() => balanceOfTotals(this.totals()));
+  /** Avvertenze quando a qualche alimento mancano calcio o ossalati, o gli ossalati sono stimati. */
+  readonly balanceCaveats = computed(() => balanceCaveats(this._items()));
+  /** true se il pasto non è vuoto ma nessun alimento ha il dato su ossalati o calcio. */
+  readonly balanceUnavailable = computed(() => balanceUnavailable(this.totals(), this._items().length));
 
   constructor() {
     effect(() => {

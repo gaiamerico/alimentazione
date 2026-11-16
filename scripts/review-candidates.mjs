@@ -46,7 +46,7 @@ const note = valueOf('--note') ?? null;
 try {
   if (approveId) {
     const foodId = await rpc('approve_food_candidate', { candidate_id: Number(approveId), note });
-    console.log(`Proposta ${approveId} approvata: alimento #${foodId} aggiunto al catalogo.`);
+    console.log(`Proposta ${approveId} approvata: alimento #${foodId} aggiunto al catalogo o completato.`);
     console.log('Ricorda: npm run export:catalog (catalogo offline).');
   } else if (rejectId) {
     await rpc('reject_food_candidate', { candidate_id: Number(rejectId), note });
@@ -69,7 +69,12 @@ try {
       const range =
         c.oxalate_min_mg !== null && c.oxalate_max_mg !== null ? ` (fonti: ${c.oxalate_min_mg}–${c.oxalate_max_mg})` : '';
       console.log(`  ${c.name_it} [${c.category}] — EN: ${c.name_en}`);
-      console.log(`  ossalati ${c.oxalate_mg} mg/100 g${range} · ${c.oxalate_basis} · confidenza ${c.oxalate_confidence}`);
+      if (c.target_food_id) console.log(`  COMPLETA l'alimento #${c.target_food_id} già in catalogo: riempie solo i campi vuoti.`);
+      console.log(
+        c.oxalate_mg === null
+          ? '  ossalati per 100 g: non ricavati (resta il dato per porzione della lista Harvard)'
+          : `  ossalati ${c.oxalate_mg} mg/100 g${range} · ${c.oxalate_basis} · confidenza ${c.oxalate_confidence}`,
+      );
       console.log(`  calcio ${c.calcium_mg} mg · colesterolo ${c.cholesterol_mg} mg · ${c.kcal} kcal`);
       console.log(`  P ${c.protein_g} g · C ${c.carbs_g} g · G ${c.fat_g} g · fibre ${c.fiber_g} g`);
       const optional = (v, unit) => (v === null || v === undefined ? 'dato non disponibile' : `${v} ${unit}`);

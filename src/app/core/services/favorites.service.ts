@@ -1,7 +1,7 @@
 import { computed, effect, inject, Injectable, signal, untracked } from '@angular/core';
 import { Food } from '../models/food.model';
 import { AuthService } from './auth.service';
-import { normalizeFood } from './food.service';
+import { FOOD_SELECT, normalizeFood } from './food.service';
 import { SupabaseService } from './supabase.service';
 import { ToastService } from './toast.service';
 
@@ -38,7 +38,7 @@ export class FavoritesService {
     this._loading.set(true);
     const { data, error } = await client
       .from('favorites')
-      .select('food:foods(*)')
+      .select(`food:foods(${FOOD_SELECT})`)
       .order('created_at', { ascending: false });
     this._loading.set(false);
     if (error) {

@@ -11,23 +11,26 @@ import { FoodService } from '../../core/services/food.service';
 import { MealService } from '../../core/services/meal.service';
 import { ToastService } from '../../core/services/toast.service';
 import {
+  balanceCaveats,
   calciumOxalateBalance,
   emptyTotals,
   guessMeal,
   HARVARD_REVISION_LABEL,
   HARVARD_TIER_LABEL,
   MISSING_VALUE_LABEL,
+  oxalatePer100g,
   scaleNutrients,
   todayIso,
 } from '../../core/utils/nutrition';
 import { BalancePanel } from '../../shared/components/balance-panel';
+import { EnrichOffer } from '../../shared/components/enrich-offer';
 import { Icon } from '../../shared/components/icon';
 import { OxalateBadge } from '../../shared/components/oxalate-badge';
 
 @Component({
   selector: 'app-food-detail-page',
   changeDetection: ChangeDetectionStrategy.OnPush,
-  imports: [DecimalPipe, ReactiveFormsModule, RouterLink, Icon, OxalateBadge, BalancePanel],
+  imports: [DecimalPipe, ReactiveFormsModule, RouterLink, Icon, OxalateBadge, BalancePanel, EnrichOffer],
   template: `
     <a routerLink="/" class="btn-ghost -ml-3 mb-3 px-3 py-1.5 text-sm"><app-icon name="arrow-left" [size]="16" /> Torna alla ricerca</a>
 
@@ -65,15 +68,19 @@ import { OxalateBadge } from '../../shared/components/oxalate-badge';
               </div>
               <div class="flex flex-wrap gap-2">
                 <button type="button" class="chip" [class.chip-active]="grams() === 100" (click)="gramsControl.setValue(100)">100 g</button>
-                <button type="button" class="chip" [class.chip-active]="grams() === f.default_portion_g" (click)="gramsControl.setValue(f.default_portion_g)">
-                  {{ f.portion_label ?? 'Porzione' }} · {{ f.default_portion_g | number: '1.0-0' }} g
-                </button>
+                @if (f.portion_label || f.default_portion_g !== 100) {
+                  <button type="button" class="chip" [class.chip-active]="grams() === f.default_portion_g" (click)="gramsControl.setValue(f.default_portion_g)">
+                    {{ f.portion_label ?? 'Porzione' }} · {{ f.default_portion_g | number: '1.0-0' }} g
+                  </button>
+                }
               </div>
             </div>
             @if (gramsControl.invalid) {
               <p class="mt-2 text-sm text-rose-600">Inserisci una quantità tra 1 e 5000 g.</p>
             }
           </section>
+
+          <app-enrich-offer [food]="f" />
 
           <!-- Tabella nutrienti -->
           <section class="card overflow-hidden">
@@ -85,7 +92,24 @@ import { OxalateBadge } from '../../shared/components/oxalate-badge';
               <tbody class="divide-y divide-stone-100 dark:divide-white/[0.05]">
                 <tr class="bg-stone-50/60 dark:bg-white/[0.02]">
                   <th scope="row" class="px-5 py-3 text-left font-medium">Ossalati</th>
-                  <td class="px-5 py-3 text-right"><app-oxalate-badge [mg]="values().oxalate_mg" /></td>
+                  <td class="px-5 py-3 text-right">
+                    <app-oxalate-badge [mg]="values().oxalate_mg" [estimated]="values().oxalateEstimated" />
+                    @if (oxalateEstimate(); as e) {
+                      <p class="mt-1.5 text-xs leading-relaxed text-stone-500 dark:text-stone-400">
+                        Stima calcolata sul momento dalla porzione della lista Harvard
+                        ({{ f.harvard?.serving }} {{ e.serving?.basis === 'volume' ? '≈' : '=' }} {{ e.serving?.grams | number: '1.0-0' }} g{{ e.serving?.basis === 'volume' ? ', bevanda: 1 ml ≈ 1 g' : '' }}):
+                        circa {{ e.mg | number: '1.0-0' }} mg per 100 g. Non è una misura per 100 g.
+                      </p>
+                    } @else if (values().oxalate_mg === null) {
+                      <p class="mt-1.5 text-xs leading-relaxed text-stone-500 dark:text-stone-400">
+                        @if (f.harvard; as h) {
+                          La lista Harvard dà {{ h.oxalate_mg_serving | number: '1.0-1' }} mg per porzione ({{ h.serving }}): il peso di questa porzione non è noto con certezza, quindi il valore per 100 g non viene stimato.
+                        } @else {
+                          Ossalato per 100 g non disponibile.
+                        }
+                      </p>
+                    }
+                  </td>
                 </tr>
                 @for (row of rows(); track row.label) {
                   <tr>
@@ -120,15 +144,17 @@ import { OxalateBadge } from '../../shared/components/oxalate-badge';
           }
 
           <section class="text-xs leading-relaxed text-stone-500 dark:text-stone-400">
-            <p><strong>Fonte nutrienti:</strong> {{ f.nutrient_source }}</p>
-            <p><strong>Fonte ossalati:</strong> {{ f.oxalate_source }} · affidabilità stima: <strong>{{ f.oxalate_confidence }}</strong></p>
+            <p><strong>Fonte nutrienti:</strong> {{ f.nutrient_source ?? missingLabel }}</p>
+            <p>
+              <strong>Fonte ossalati:</strong> {{ f.oxalate_source ?? missingLabel }}@if (f.oxalate_confidence) { · affidabilità stima: <strong>{{ f.oxalate_confidence }}</strong>}
+            </p>
             <p class="mt-1">Il contenuto di ossalati varia sensibilmente per varietà, maturazione, terreno e cottura: i valori sono indicativi.</p>
             <p class="mt-1">Strumento informativo: <a routerLink="/avvertenze" class="underline">leggi le avvertenze</a>.</p>
           </section>
         </div>
 
         <aside class="space-y-5">
-          <app-balance-panel [balance]="balance()" heading="Questo alimento da solo" />
+          <app-balance-panel [balance]="balance()" heading="Questo alimento da solo" [caveats]="caveats()" [unavailable]="values().oxalate_mg === null || values().calcium_mg === null" />
 
           <section class="card space-y-3 p-5">
             <h2 class="font-semibold">Aggiungi</h2>
@@ -206,7 +232,17 @@ export class FoodDetailPage {
   });
   protected readonly balance = computed(() => {
     const v = this.values();
-    return calciumOxalateBalance(v.calcium_mg, v.oxalate_mg);
+    return calciumOxalateBalance(v.calcium_mg ?? 0, v.oxalate_mg ?? 0);
+  });
+  protected readonly caveats = computed(() => {
+    const f = this.food();
+    return f ? balanceCaveats([{ food: f, grams: this.grams() }]) : [];
+  });
+  /** Stima per 100 g ricavata dalla porzione Harvard; null se l'alimento ha il dato in catalogo o non è stimabile. */
+  protected readonly oxalateEstimate = computed(() => {
+    const f = this.food();
+    const estimate = f ? oxalatePer100g(f) : null;
+    return estimate?.estimated ? estimate : null;
   });
   protected readonly isFavorite = computed(() => {
     const f = this.food();

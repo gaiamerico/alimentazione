@@ -1,22 +1,22 @@
 // Misura l'affidabilità dell'assistente sugli alimenti che la lista Harvard NON copre.
 //
 // Prende N alimenti dalla lista Harvard (oxalate_reference), li fa cercare all'agente
-// SENZA lo strumento Harvard (quindi solo ricerca web e USDA, come per un alimento
+// SENZA lo strumento Harvard (quindi solo ricerca web Tavily e USDA, come per un alimento
 // fuori lista) e confronta il risultato con il valore Harvard riportato alla stessa
 // porzione. Usa lo stesso ciclo della Edge Function (supabase/functions/resolve-food/agent.ts).
 //
 // Uso:
-//   ANTHROPIC_API_KEY=sk-ant-... node scripts/eval-agent.mjs            # 50 alimenti
-//   ANTHROPIC_API_KEY=sk-ant-... node scripts/eval-agent.mjs --n 10     # prova ridotta
+//   GEMINI_API_KEY=... TAVILY_API_KEY=... node scripts/eval-agent.mjs            # 50 alimenti
+//   GEMINI_API_KEY=... TAVILY_API_KEY=... node scripts/eval-agent.mjs --n 10     # prova ridotta
 //   ... --seed 7            # campione diverso (stesso seed = stesso campione)
 //   ... --out eval.json     # salva il dettaglio di ogni alimento
 //
 // ATTENZIONE AI COSTI: ogni alimento è una ricerca completa dell'agente (fino a 6
-// ricerche web). Prova prima con --n 5 e guarda il consumo di token stampato alla fine.
+// ricerche Tavily in modalità advanced, 2 crediti l'una, più i token Gemini). Prova prima con --n 5 e guarda il consumo di token stampato alla fine.
 //
-// Variabili: ANTHROPIC_API_KEY solo dall'ambiente della shell (non va scritta in .env);
+// Variabili: GEMINI_API_KEY (o GOOGLE_API_KEY) e TAVILY_API_KEY solo dall'ambiente della shell (non vanno scritte in .env);
 // dal file .env: SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, FDC_API_KEY.
-// Opzionali: ANTHROPIC_MODEL (default claude-sonnet-5-5), ANTHROPIC_EFFORT (default medium).
+// Opzionali: GEMINI_MODEL (default gemini-3.5-flash-lite), GEMINI_THINKING_BUDGET (default -1 = dinamico).
 //
 // Servono le voci con peso della porzione verificato (serving_g): esegui prima
 // `node scripts/enrich-reference.mjs --apply`. Il confronto è alla porzione Harvard:
@@ -34,8 +34,8 @@ const envFile = resolve(root, '.env');
 if (existsSync(envFile)) {
   for (const line of readFileSync(envFile, 'utf8').split('\n')) {
     const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
-    // La chiave Anthropic non si legge mai da .env: solo dall'ambiente.
-    if (m && m[1] !== 'ANTHROPIC_API_KEY' && !(m[1] in process.env)) process.env[m[1]] = m[2].replace(/^['"]|['"]$/g, '');
+    // Le chiavi Gemini e Tavily non si leggono mai da .env: solo dall'ambiente.
+    if (m && m[1] !== 'GEMINI_API_KEY' && m[1] !== 'GOOGLE_API_KEY' && m[1] !== 'TAVILY_API_KEY' && !(m[1] in process.env)) process.env[m[1]] = m[2].replace(/^['"]|['"]$/g, '');
   }
 }
 
@@ -44,9 +44,11 @@ const valueOf = (flag) => (args.includes(flag) ? args[args.indexOf(flag) + 1] : 
 const N = Number(valueOf('--n') ?? 50);
 const SEED = Number(valueOf('--seed') ?? 1);
 const OUT = valueOf('--out');
-const { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, ANTHROPIC_API_KEY } = process.env;
-const MODEL = process.env.ANTHROPIC_MODEL || 'claude-sonnet-5-5';
-const EFFORT = process.env.ANTHROPIC_EFFORT ?? 'medium';
+const { SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY } = process.env;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY;
+const TAVILY_API_KEY = process.env.TAVILY_API_KEY;
+const MODEL = process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite';
+const THINKING_BUDGET = Number(process.env.GEMINI_THINKING_BUDGET ?? -1);
 const FDC_API_KEY = process.env.FDC_API_KEY || 'DEMO_KEY';
 const DEADLINE_MS = 135_000; // come nella Edge Function
 
@@ -82,8 +84,8 @@ export function sample(rows, n, seed) {
 
 // Esecuzione diretta (non quando il file viene importato).
 if (process.argv[1] && resolve(process.argv[1]) === import.meta.filename) {
-  if (!ANTHROPIC_API_KEY) {
-    console.error('Imposta ANTHROPIC_API_KEY nell\'ambiente: ANTHROPIC_API_KEY=sk-ant-... node scripts/eval-agent.mjs');
+  if (!GEMINI_API_KEY || !TAVILY_API_KEY) {
+    console.error('Imposta le chiavi nell\'ambiente: GEMINI_API_KEY=... TAVILY_API_KEY=... node scripts/eval-agent.mjs');
     process.exit(1);
   }
   if (!SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
@@ -116,11 +118,12 @@ if (process.argv[1] && resolve(process.argv[1]) === import.meta.filename) {
 
   const items = sample(reference, Math.min(N, reference.length), SEED);
   console.log(
-    `${items.length} alimenti (su ${reference.length} con peso verificato) · modello ${MODEL} · effort ${EFFORT || 'default'} · seed ${SEED}\n` +
-      `Strumento Harvard disattivato: l'agente usa solo ricerca web e USDA.\n`,
+    `${items.length} alimenti (su ${reference.length} con peso verificato) · modello ${MODEL} · thinking budget ${Number.isFinite(THINKING_BUDGET) ? THINKING_BUDGET : 'default'} · seed ${SEED}\n` +
+      `Strumento Harvard disattivato: l'agente usa solo ricerca web (Tavily) e USDA.\n`,
   );
 
-  const usage = { input_tokens: 0, output_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, web_search_requests: 0 };
+  // Campi di `usageMetadata` (generateContent); web_search_calls lo segnala agent.ts a ogni ricerca web.
+  const usage = { promptTokenCount: 0, candidatesTokenCount: 0, thoughtsTokenCount: 0, cachedContentTokenCount: 0, web_search_calls: 0 };
   const details = [];
 
   for (const ref of items) {
@@ -137,16 +140,14 @@ if (process.argv[1] && resolve(process.argv[1]) === import.meta.filename) {
         catalog,
         similar: [],
         harvardLookup: null,
-        anthropicApiKey: ANTHROPIC_API_KEY,
+        geminiApiKey: GEMINI_API_KEY,
+        tavilyApiKey: TAVILY_API_KEY,
         model: MODEL,
-        effort: EFFORT,
+        thinkingBudget: Number.isFinite(THINKING_BUDGET) ? THINKING_BUDGET : null,
         fdcApiKey: FDC_API_KEY,
         maxSearches: 6,
         onUsage: (u) => {
-          for (const key of ['input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens']) {
-            usage[key] += Number(u[key]) || 0;
-          }
-          usage.web_search_requests += Number(u.server_tool_use?.web_search_requests) || 0;
+          for (const key of Object.keys(usage)) usage[key] += Number(u[key]) || 0;
         },
       });
       row.status = outcome.status;
@@ -211,7 +212,7 @@ if (process.argv[1] && resolve(process.argv[1]) === import.meta.filename) {
   const underestimated = valid.filter((d) => d.expected_tier === 'high' && d.agent_tier !== 'high');
   console.log(`Alimenti alti sottostimati:  ${underestimated.length}${underestimated.length ? ' → ' + underestimated.map((d) => d.name_en).join(', ') : ''}`);
   console.log(
-    `Consumo: ${usage.input_tokens} token in ingresso (+${usage.cache_read_input_tokens} dalla cache), ${usage.output_tokens} in uscita, ${usage.web_search_requests} ricerche web.`,
+    `Consumo: ${usage.promptTokenCount} token in ingresso (di cui ${usage.cachedContentTokenCount} dalla cache), ${usage.candidatesTokenCount} in uscita, ${usage.thoughtsTokenCount} di ragionamento, ${usage.web_search_calls} ricerche web (Tavily).`,
   );
   console.log(
     '\nNota: il confronto dice quanto l\'agente si avvicina alla lista Harvard partendo da altre fonti. Fonti diverse misurano\n' +
@@ -219,7 +220,7 @@ if (process.argv[1] && resolve(process.argv[1]) === import.meta.filename) {
   );
 
   if (OUT) {
-    writeFileSync(resolve(process.cwd(), OUT), JSON.stringify({ model: MODEL, effort: EFFORT, seed: SEED, usage, details }, null, 2));
+    writeFileSync(resolve(process.cwd(), OUT), JSON.stringify({ model: MODEL, thinking_budget: THINKING_BUDGET, seed: SEED, usage, details }, null, 2));
     console.log(`Dettaglio salvato in ${OUT}`);
   }
 }

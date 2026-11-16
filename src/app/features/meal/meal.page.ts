@@ -49,10 +49,14 @@ import { OxalateBadge } from '../../shared/components/oxalate-badge';
                   <div class="min-w-0 flex-1">
                     <a [routerLink]="['/alimento', item.food.id]" class="block truncate font-medium hover:text-brand-700 dark:hover:text-brand-200">{{ item.food.name_it }}</a>
                     <p class="text-xs text-stone-500 tabular-nums dark:text-stone-400">
-                      Ca {{ v.calcium_mg | number: '1.0-0' }} mg · {{ v.kcal | number: '1.0-0' }} kcal · Col. {{ v.cholesterol_mg | number: '1.0-0' }} mg
+                      @if (v.calcium_mg === null && v.kcal === null) {
+                        valori nutrizionali non disponibili
+                      } @else {
+                        Ca {{ (v.calcium_mg | number: '1.0-0') ?? 'n.d.' }} mg · {{ (v.kcal | number: '1.0-0') ?? 'n.d.' }} kcal · Col. {{ (v.cholesterol_mg | number: '1.0-0') ?? 'n.d.' }} mg
+                      }
                     </p>
                   </div>
-                  <app-oxalate-badge [mg]="v.oxalate_mg" [showLabel]="false" />
+                  <app-oxalate-badge [mg]="v.oxalate_mg" [estimated]="v.oxalateEstimated" [showLabel]="false" />
                   <div class="flex items-center gap-1">
                     <button type="button" class="btn-ghost size-9 p-0" (click)="step(item.food.id, item.grams, -10)" aria-label="Diminuisci di 10 g">
                       <app-icon name="minus" [size]="16" />
@@ -90,7 +94,7 @@ import { OxalateBadge } from '../../shared/components/oxalate-badge';
       </div>
 
       <aside class="space-y-5">
-        <app-balance-panel [balance]="meal.balance()" />
+        <app-balance-panel [balance]="meal.balance()" [caveats]="meal.balanceCaveats()" [unavailable]="meal.balanceUnavailable()" />
 
         @if (meal.items().length > 0) {
           <section class="card p-5">

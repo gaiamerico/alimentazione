@@ -1,11 +1,17 @@
 import { DecimalPipe } from '@angular/common';
 import { ChangeDetectionStrategy, Component, computed, input } from '@angular/core';
-import { NutrientTotals, OptionalNutrient } from '../../core/models/food.model';
+import { NutrientKey, NutrientTotals, OptionalNutrient } from '../../core/models/food.model';
 import { DAILY_REFERENCE, isPartial, MISSING_VALUE_LABEL } from '../../core/utils/nutrition';
 
 interface Tile {
+  key: NutrientKey;
   label: string;
-  value: number;
+  /** null = nessun alimento riporta il dato. */
+  value: number | null;
+  /** true = ad alcuni alimenti manca il dato: il totale somma solo i valori disponibili. */
+  partial: boolean;
+  /** true = il totale comprende ossalati stimati dalla porzione della lista Harvard. */
+  estimated: boolean;
   unit: string;
   digits: string;
   /** Percentuale rispetto al riferimento giornaliero (se applicabile). */
@@ -26,6 +32,8 @@ interface OptionalTile {
   partial: boolean;
 }
 
+const NO_REFERENCE = { percent: null, ref: null, tone: '', isLimit: false } as const;
+
 /** Riquadri con i totali nutrizionali (pasto o giornata). */
 @Component({
   selector: 'app-nutrient-summary',
@@ -33,13 +41,33 @@ interface OptionalTile {
   imports: [DecimalPipe],
   template: `
     <div class="grid grid-cols-2 gap-3 sm:grid-cols-4">
-      @for (t of tiles(); track t.label) {
+      @for (t of tiles(); track t.key) {
         <div class="card p-4">
           <p class="text-xs font-medium text-stone-500 dark:text-stone-400">{{ t.label }}</p>
-          <p class="mt-1 text-xl font-semibold tabular-nums tracking-tight">
-            {{ t.value | number: t.digits }}<span class="ml-0.5 text-xs font-normal text-stone-400">{{ t.unit }}</span>
-          </p>
-          @if (t.percent !== null) {
+          @if (t.value === null) {
+            <p class="mt-1 text-sm text-stone-400 italic dark:text-stone-500">{{ missingLabel }}</p>
+          } @else {
+            <p class="mt-1 text-xl font-semibold tabular-nums tracking-tight">
+              {{ t.estimated ? '≈ ' : '' }}{{ t.value | number: t.digits }}<span class="ml-0.5 text-xs font-normal text-stone-400">{{ t.unit }}</span>
+            </p>
+            @if (t.partial || t.estimated) {
+              <p class="mt-1 flex flex-wrap gap-1">
+                @if (t.partial) {
+                  <span
+                    class="rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-medium text-amber-800 dark:bg-amber-500/15 dark:text-amber-200"
+                    title="Alcuni alimenti non riportano questo dato: il totale somma solo i valori disponibili."
+                  >parziale</span>
+                }
+                @if (t.estimated) {
+                  <span
+                    class="rounded-full bg-stone-200 px-1.5 py-0.5 text-[10px] font-medium text-stone-700 dark:bg-white/10 dark:text-stone-200"
+                    title="Il totale comprende ossalati stimati dalla porzione della lista Harvard, non misure per 100 g."
+                  >include stime</span>
+                }
+              </p>
+            }
+          }
+          @if (t.value !== null && t.percent !== null) {
             <div class="mt-2 h-1.5 rounded-full bg-stone-200 dark:bg-white/10">
               <div
                 class="h-full rounded-full transition-[width] duration-500"
@@ -97,21 +125,31 @@ export class NutrientSummary {
       { key: 'sodium_mg', label: 'Sodio', value: t.sodium_mg, unit: ' mg', digits: '1.0-0', partial: isPartial(t, 'sodium_mg') },
     ];
   });
-  protected readonly hasPartial = computed(() => this.optionalTiles().some((o) => o.partial));
+  protected readonly hasPartial = computed(() => this.optionalTiles().some((o) => o.partial) || this.tiles().some((t) => t.partial));
 
   protected readonly tiles = computed((): Tile[] => {
     const t = this.totals();
     const daily = this.showDaily();
-    const pct = (v: number, ref: number) => (daily ? (v / ref) * 100 : null);
+    const pct = (key: NutrientKey, ref: number) => (daily && t[key] !== null ? ((t[key] ?? 0) / ref) * 100 : null);
+    const tile = (key: NutrientKey, label: string, unit: string, digits: string, rest: Pick<Tile, 'percent' | 'ref' | 'tone' | 'isLimit'> = NO_REFERENCE): Tile => ({
+      key,
+      label,
+      value: t[key],
+      partial: isPartial(t, key),
+      estimated: key === 'oxalate_mg' && t.oxalateEstimated && t[key] !== null,
+      unit,
+      digits,
+      ...rest,
+    });
     return [
-      { label: 'Energia', value: t.kcal, unit: ' kcal', digits: '1.0-0', percent: pct(t.kcal, DAILY_REFERENCE.kcal), ref: `${DAILY_REFERENCE.kcal} kcal`, tone: 'bg-brand-500', isLimit: false },
-      { label: 'Proteine', value: t.protein_g, unit: ' g', digits: '1.0-1', percent: null, ref: null, tone: '', isLimit: false },
-      { label: 'Carboidrati', value: t.carbs_g, unit: ' g', digits: '1.0-1', percent: null, ref: null, tone: '', isLimit: false },
-      { label: 'Grassi', value: t.fat_g, unit: ' g', digits: '1.0-1', percent: null, ref: null, tone: '', isLimit: false },
-      { label: 'Calcio', value: t.calcium_mg, unit: ' mg', digits: '1.0-0', percent: pct(t.calcium_mg, DAILY_REFERENCE.calcium_mg), ref: `${DAILY_REFERENCE.calcium_mg} mg`, tone: 'bg-sky-500', isLimit: false },
-      { label: 'Colesterolo', value: t.cholesterol_mg, unit: ' mg', digits: '1.0-0', percent: pct(t.cholesterol_mg, DAILY_REFERENCE.cholesterol_mg), ref: `max ${DAILY_REFERENCE.cholesterol_mg} mg`, tone: 'bg-violet-500', isLimit: true },
-      { label: 'Ossalati', value: t.oxalate_mg, unit: ' mg', digits: '1.0-0', percent: pct(t.oxalate_mg, DAILY_REFERENCE.oxalate_mg), ref: `max ${DAILY_REFERENCE.oxalate_mg} mg`, tone: 'bg-amber-500', isLimit: true },
-      { label: 'Fibre', value: t.fiber_g, unit: ' g', digits: '1.0-1', percent: null, ref: null, tone: '', isLimit: false },
+      tile('kcal', 'Energia', ' kcal', '1.0-0', { percent: pct('kcal', DAILY_REFERENCE.kcal), ref: `${DAILY_REFERENCE.kcal} kcal`, tone: 'bg-brand-500', isLimit: false }),
+      tile('protein_g', 'Proteine', ' g', '1.0-1'),
+      tile('carbs_g', 'Carboidrati', ' g', '1.0-1'),
+      tile('fat_g', 'Grassi', ' g', '1.0-1'),
+      tile('calcium_mg', 'Calcio', ' mg', '1.0-0', { percent: pct('calcium_mg', DAILY_REFERENCE.calcium_mg), ref: `${DAILY_REFERENCE.calcium_mg} mg`, tone: 'bg-sky-500', isLimit: false }),
+      tile('cholesterol_mg', 'Colesterolo', ' mg', '1.0-0', { percent: pct('cholesterol_mg', DAILY_REFERENCE.cholesterol_mg), ref: `max ${DAILY_REFERENCE.cholesterol_mg} mg`, tone: 'bg-violet-500', isLimit: true }),
+      tile('oxalate_mg', 'Ossalati', ' mg', '1.0-0', { percent: pct('oxalate_mg', DAILY_REFERENCE.oxalate_mg), ref: `max ${DAILY_REFERENCE.oxalate_mg} mg`, tone: 'bg-amber-500', isLimit: true }),
+      tile('fiber_g', 'Fibre', ' g', '1.0-1'),
     ];
   });
 }

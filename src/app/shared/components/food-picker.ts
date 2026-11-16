@@ -4,6 +4,7 @@ import { FormControl, ReactiveFormsModule } from '@angular/forms';
 import { debounceTime, distinctUntilChanged, switchMap } from 'rxjs';
 import { Food } from '../../core/models/food.model';
 import { FoodService } from '../../core/services/food.service';
+import { oxalatePer100g } from '../../core/utils/nutrition';
 import { Icon } from './icon';
 import { OxalateBadge } from './oxalate-badge';
 
@@ -51,7 +52,8 @@ import { OxalateBadge } from './oxalate-badge';
                   <span class="block truncate font-medium">{{ food.name_it }}</span>
                   <span class="block text-xs text-stone-500 dark:text-stone-400">{{ food.category }}</span>
                 </span>
-                <app-oxalate-badge [mg]="food.oxalate_mg" [showLabel]="false" />
+                @let ox = oxalate(food);
+                <app-oxalate-badge [mg]="ox?.mg ?? null" [estimated]="ox?.estimated ?? false" [showLabel]="false" />
               </button>
             </li>
           }
@@ -68,6 +70,7 @@ export class FoodPicker {
   readonly picked = output<Food>();
 
   protected readonly inputId = `food-picker-${FoodPicker.nextId++}`;
+  protected readonly oxalate = oxalatePer100g;
   protected readonly query = new FormControl('', { nonNullable: true });
   protected readonly results = signal<Food[]>([]);
   protected readonly open = signal(false);
