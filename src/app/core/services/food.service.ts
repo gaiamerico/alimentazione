@@ -63,18 +63,13 @@ export class FoodService {
   async search(filters: SearchFilters, limit = 60): Promise<Food[]> {
     const client = this.supabase.client;
     if (client && navigator.onLine) {
-      const { data, error } = await client.rpc(
-        'search_foods',
-        {
-          q: filters.query.trim(),
-          max_oxalate: filters.lowOxalate ? OXALATE_LOW_MAX : null,
-          min_calcium: filters.highCalcium ? HIGH_CALCIUM_MIN : null,
-          no_cholesterol: filters.noCholesterol,
-          food_category: filters.category,
-          result_limit: limit,
-        },
-        { get: true }, // GET → risposta cacheabile dal service worker
-      );
+      // Con GET i parametri viaggiano nell'URL: un null diventerebbe la stringa "null"
+      // (errore 22P02 su numeric). I filtri non attivi si omettono: valgono i default della funzione.
+      const args: Record<string, string | number | boolean> = { q: filters.query.trim(), no_cholesterol: filters.noCholesterol, result_limit: limit };
+      if (filters.lowOxalate) args['max_oxalate'] = OXALATE_LOW_MAX;
+      if (filters.highCalcium) args['min_calcium'] = HIGH_CALCIUM_MIN;
+      if (filters.category) args['food_category'] = filters.category;
+      const { data, error } = await client.rpc('search_foods', args, { get: true }); // GET → risposta cacheabile dal service worker
       if (!error && data) return this.withHarvard((data as Food[]).map(normalizeFood));
     }
     await this.loadCatalog();
