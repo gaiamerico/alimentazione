@@ -30,6 +30,12 @@ export const routes: Routes = [
     loadComponent: () => import('./features/favorites/favorites.page').then((m) => m.FavoritesPage),
   },
   {
+    path: 'verifica',
+    title: 'Verifica proposte · NutriOssalati',
+    canActivate: [authGuard],
+    loadComponent: () => import('./features/review/review.page').then((m) => m.ReviewPage),
+  },
+  {
     path: 'accedi',
     title: 'Accedi · NutriOssalati',
     loadComponent: () => import('./features/auth/login.page').then((m) => m.LoginPage),

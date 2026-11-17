@@ -138,6 +138,7 @@ export class Shell {
     { path: '/pasto', label: 'Pasto', icon: 'scale', exact: false },
     { path: '/diario', label: 'Diario', icon: 'book', exact: false },
     { path: '/preferiti', label: 'Preferiti', icon: 'star', exact: false },
+    { path: '/verifica', label: 'Verifica', icon: 'check', exact: false },
   ];
 
   protected readonly themeIcon = computed<IconName>(() =>
